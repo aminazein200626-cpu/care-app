@@ -1,0 +1,18 @@
+:root {
+  --primary-green: #365314; /* الأخضر الغامق */
+  --light-green: #a3e635;   /* الأخضر الفاتح */
+  --bg-light: #f5f5f4;
+  --bg-dark: #121212;
+  --card-light: #ffffff;
+  --card-dark: #1e1e1e;
+  --transition: 0.3s ease;
+}
+
+body, html, #root {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  overflow: hidden; /* لمنع السكرول المزدوج */
+}
