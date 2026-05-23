@@ -9,13 +9,20 @@ const userSchema = new mongoose.Schema({
   wilaya: String,
   postalCode: String,
   profilePicture: String,
-  role: { type: String, enum: ['Client', 'Provider', 'AuthorizedPerson', 'Admin'], default: 'Client' },
+  role: {
+    type: String,
+    enum: ['Client', 'Provider', 'AuthorizedPerson', 'Admin'],
+    default: 'Client'
+  },
   isActive: { type: Boolean, default: true },
   isVerified: { type: Boolean, default: false },
   gender: String,
   nationalId: String,
   dateOfBirth: Date,
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  
+  
+  reportsCount: { type: Number, default: 0 }
 });
 
 module.exports = mongoose.model('User', userSchema);

@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/app_theme.dart';
+import '../../core/app_routes.dart';
 import '../../services/client_api_service.dart';
 
 class AddTasksBeforeBookingScreen extends StatefulWidget {
@@ -9,10 +13,12 @@ class AddTasksBeforeBookingScreen extends StatefulWidget {
   final String serviceName;
   final String selectedDate;
   final String dependantId;
-  final String dependantName; 
+  final String dependantName;
   final Map<String, dynamic> selectedSlot;
   final String location;
   final String notes;
+  final int startTimestamp;   // ✅ جديد - required
+  final int endTimestamp;     // ✅ جديد - required
 
   const AddTasksBeforeBookingScreen({
     super.key,
@@ -23,8 +29,10 @@ class AddTasksBeforeBookingScreen extends StatefulWidget {
     required this.selectedSlot,
     required this.location,
     required this.notes,
-    required this.dependantId,      
+    required this.dependantId,
     required this.dependantName,
+    required this.startTimestamp,
+    required this.endTimestamp,
   });
 
   @override
@@ -34,6 +42,8 @@ class AddTasksBeforeBookingScreen extends StatefulWidget {
 class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScreen> {
   final List<TextEditingController> _taskControllers = [TextEditingController()];
   final ClientApiService _api = ClientApiService();
+  final ImagePicker _picker = ImagePicker();
+  List<File> _selectedFiles = [];
   bool _isLoading = false;
 
   void _addTaskField() {
@@ -49,50 +59,85 @@ class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScree
     });
   }
 
+  Future<void> _pickFiles() async {
+    final List<XFile>? pickedFiles = await _picker.pickMultiImage();
+    if (pickedFiles != null && pickedFiles.isNotEmpty) {
+      setState(() {
+        _selectedFiles = pickedFiles.map((f) => File(f.path)).toList();
+      });
+    }
+  }
+
+  void _removeFile(int index) {
+    setState(() {
+      _selectedFiles.removeAt(index);
+    });
+  }
+
+  // For display only (converts 12-hour to 24-hour for summary)
+  String _convertTo24HourForDisplay(String time12) {
+    final parts = time12.split(' ');
+    if (parts.length != 2) return time12;
+    final time = parts[0];
+    final period = parts[1].toUpperCase();
+    final hourMin = time.split(':');
+    int hour = int.parse(hourMin[0]);
+    final minute = int.parse(hourMin[1]);
+    if (period == 'PM' && hour != 12) hour += 12;
+    if (period == 'AM' && hour == 12) hour = 0;
+    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _submitBookingRequest() async {
-    // جمع المهام
-    final tasks = _taskControllers
+    final List<Map<String, String>> tasksList = _taskControllers
         .where((c) => c.text.trim().isNotEmpty)
         .map((c) => {'taskName': c.text.trim()})
         .toList();
-    
-    // التحقق من وجود خدمة
+
     if (widget.serviceName.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Service name is missing. Please go back and select a service.'), backgroundColor: Colors.red),
-      );
+      _showError('Service name is missing. Please go back and select a service.');
       return;
     }
 
-    // التحقق من وجود وقت
     if (widget.selectedSlot['startTime'] == null || widget.selectedSlot['endTime'] == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Time slot is missing. Please go back and select a time.'), backgroundColor: Colors.red),
-      );
+      _showError('Time slot is missing. Please go back and select a time.');
       return;
     }
 
     setState(() => _isLoading = true);
-    
+
     try {
-      final requestData = {
+      // Use the timestamps passed from AvailabilityScreen directly
+      final startTimestamp = widget.startTimestamp;
+      final endTimestamp = widget.endTimestamp;
+
+      // For display only (backward compatibility)
+      final startTime24 = _convertTo24HourForDisplay(widget.selectedSlot['startTime']);
+      final endTime24 = _convertTo24HourForDisplay(widget.selectedSlot['endTime']);
+
+      final String tasksJson = jsonEncode(tasksList);
+
+      final Map<String, String> fields = {
         'providerId': widget.providerId,
-        'dependantId': widget.dependantId, 
+        'dependantId': widget.dependantId,
         'serviceName': widget.serviceName,
         'date': widget.selectedDate,
-        'startTime': widget.selectedSlot['startTime'],
-        'endTime': widget.selectedSlot['endTime'],
+        'startTimestamp': startTimestamp.toString(),
+        'endTimestamp': endTimestamp.toString(),
+        'startTime': startTime24,
+        'endTime': endTime24,
         'location': widget.location,
         'notes': widget.notes,
-        'tasks': tasks,
+        'tasks': tasksJson,
       };
-      
-      print('📤 Sending booking request: $requestData');
-      
-      final result = await _api.createBookingRequest(requestData);
-      
+
+      final result = await _api.createBookingRequestWithFiles(
+        fields: fields,
+        files: _selectedFiles,
+      );
+
       print('✅ Booking request response: $result');
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -100,19 +145,24 @@ class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScree
             backgroundColor: Colors.green,
           ),
         );
-        // العودة إلى الصفحة الرئيسية
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          AppRoutes.clientDashboard,
+          (route) => false,
+        );
       }
     } catch (e) {
       print('❌ Error sending booking request: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
-      }
+      _showError('Error: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
   }
 
   @override
@@ -122,7 +172,7 @@ class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScree
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text('Add Tasks'),
+        title: const Text('Add Tasks & Files'),
         backgroundColor: AppTheme.primary,
         foregroundColor: Colors.white,
       ),
@@ -131,7 +181,6 @@ class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScree
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Summary Card
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -152,10 +201,9 @@ class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScree
               ),
             ),
             const SizedBox(height: 20),
-            
+
             Text('Tasks to be completed', style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
-            
             ..._taskControllers.asMap().entries.map((entry) {
               int index = entry.key;
               return Padding(
@@ -183,15 +231,74 @@ class _AddTasksBeforeBookingScreenState extends State<AddTasksBeforeBookingScree
                 ),
               );
             }),
-            
             TextButton.icon(
               onPressed: _addTaskField,
               icon: const Icon(Icons.add, color: AppTheme.primary),
               label: Text('Add Another Task', style: TextStyle(color: AppTheme.primary)),
             ),
-            
+
+            const SizedBox(height: 20),
+
+            Text('Attachments (Optional)', style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0F172A) : Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _pickFiles,
+                    icon: const Icon(Icons.attach_file),
+                    label: Text(_selectedFiles.isEmpty ? 'Select Files (Images)' : 'Add More Files'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  if (_selectedFiles.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    ..._selectedFiles.asMap().entries.map((entry) {
+                      int idx = entry.key;
+                      File file = entry.value;
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.divider),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.insert_drive_file, size: 20, color: AppTheme.primary),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                file.path.split('/').last,
+                                style: const TextStyle(fontSize: 12),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                              onPressed: () => _removeFile(idx),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ],
+              ),
+            ),
+
             const SizedBox(height: 30),
-            
+
             SizedBox(
               width: double.infinity,
               height: 55,

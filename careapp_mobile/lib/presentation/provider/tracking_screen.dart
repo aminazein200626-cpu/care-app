@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:url_launcher/url_launcher.dart'; // ✅ إضافة لفتح الملفات
 import '../../core/api_config.dart';
 import '../../core/app_theme.dart';
 
@@ -27,6 +28,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
   bool _ratingDialogShown = false;
   IO.Socket? _socket;
   bool _isConnected = false;
+
+  // ✅ معلومات المعال والملفات
+  Map<String, dynamic>? _dependent;
+  List<Map<String, dynamic>> _dependentFiles = [];
+  List<Map<String, dynamic>> _taskFiles = [];
 
   // مراحل التتبع
   bool _accepted = false;
@@ -98,7 +104,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   void _handleTrackingUpdate(Map<String, dynamic> data) {
     if (!mounted) return;
-    // تحديث حالة الدفع والمبلغ المتبقي من حدث التتبع
     if (data['paymentStatus'] != null) {
       setState(() {
         _data['paymentStatus'] = data['paymentStatus'];
@@ -109,7 +114,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
       debugPrint('💰 Payment status updated: ${_data['paymentStatus']}, remaining: ${_data['remainingAmount']}');
       _checkAndShowClientRatingDialog();
     }
-    // تحديث المراحل والمهام إن وجدت
     if (data['stage'] != null) {
       setState(() {
         _updateStagesFromStatus(data['stage']);
@@ -125,6 +129,26 @@ class _TrackingScreenState extends State<TrackingScreen> {
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       await Geolocator.requestPermission();
+    }
+  }
+
+  Future<void> _fetchTaskFiles(String taskId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null) return;
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/task-files/$taskId'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body);
+        setState(() {
+          _taskFiles = List<Map<String, dynamic>>.from(data);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching task files: $e');
     }
   }
 
@@ -150,10 +174,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
           _data = data;
           _workSteps = List<Map<String, dynamic>>.from(data['workSteps'] ?? []);
           _attachments = List<Map<String, dynamic>>.from(data['attachments'] ?? []);
+          // ✅ استخراج معلومات المعال
+          if (data['dependent'] != null) {
+            _dependent = Map<String, dynamic>.from(data['dependent']);
+            _dependentFiles = List<Map<String, dynamic>>.from(_dependent?['files'] ?? []);
+          }
           final stage = data['trackingStage'] ?? 'Pending';
           _updateStagesFromStatus(stage);
           _isLoading = false;
         });
+        // ✅ جلب ملفات المهمة إذا وجد taskId
+        if (data['taskId'] != null) {
+          await _fetchTaskFiles(data['taskId'].toString());
+        }
         if (_onWay && !_completed && !_isTrackingLocation) {
           _startLocationTracking();
         }
@@ -258,12 +291,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _locationTimer?.cancel();
     await _notifyClient("Service Completed", "The service has been marked as completed.");
     _showSnackBar("✓ Service Completed", Colors.green);
-    // إعادة تحميل البيانات لتحديث حالة الدفع
     await _fetchData();
     setState(() { _isLoading = false; });
   }
 
-  // ✅ التحقق من عرض نافذة تقييم العميل
   void _checkAndShowClientRatingDialog() {
     final paymentStatus = _data['paymentStatus'] ?? 'Pending';
     final clientRating = _data['clientRating'];
@@ -273,7 +304,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
-  // ✅ نافذة تقييم العميل من قبل المزود
   void _showRateClientDialog() {
     int rating = 0;
     String comment = '';
@@ -331,7 +361,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
-  // ✅ إرسال تقييم العميل إلى الخادم
   Future<void> _submitClientRating(int rating, String comment) async {
     setState(() => _isUpdating = true);
     final prefs = await SharedPreferences.getInstance();
@@ -370,7 +399,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
-  // ==================== Client Tasks ====================
   Future<void> _updateTaskStatus(int taskIndex, String status) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
@@ -400,7 +428,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
-  // ==================== Work Steps with file ====================
   Future<void> _addWorkStepWithFile(File? file, String description, String note) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
@@ -495,7 +522,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
-  // ==================== Upload Attachment ====================
   Future<void> _uploadAttachment(File file, String type, String caption) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
@@ -582,7 +608,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
-  // ==================== Location Tracking ====================
   void _startLocationTracking() async {
     _isTrackingLocation = true;
     _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
@@ -606,6 +631,16 @@ class _TrackingScreenState extends State<TrackingScreen> {
       headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
       body: jsonEncode({'bookingId': _actualBookingId, 'lat': lat, 'lng': lng}),
     );
+  }
+
+  Future<void> _openFile(String url) async {
+    final fullUrl = url.startsWith('http') ? url : '${ApiConfig.baseUrl}$url';
+    final Uri uri = Uri.parse(fullUrl);
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      _showSnackBar("Cannot open file: $e", Colors.red);
+    }
   }
 
   // ==================== UI ====================
@@ -661,6 +696,70 @@ class _TrackingScreenState extends State<TrackingScreen> {
             ),
           ),
           const SizedBox(height: 16),
+
+          // ✅ Dependant Information
+          if (_dependent != null) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: isDark ? const Color(0xFF1E293B) : Colors.white, borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Dependant Information", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 8),
+                  _infoRow("Full Name", _dependent!['name'] ?? 'N/A'),
+                  _infoRow("Relationship", _dependent!['relationship'] ?? 'N/A'),
+                  _infoRow("Age", _dependent!['age']?.toString() ?? 'N/A'),
+                  _infoRow("Health Notes", _dependent!['healthNotes'] ?? 'No notes'),
+                  if (_dependentFiles.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text("Files:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _dependentFiles.map((file) => GestureDetector(
+                        onTap: () => _openFile(file['url'] ?? ''),
+                        child: Chip(
+                          label: Text(file['filename'] ?? 'File', style: const TextStyle(fontSize: 11)),
+                          avatar: const Icon(Icons.attach_file, size: 14),
+                          backgroundColor: AppTheme.primary.withOpacity(0.1),
+                        ),
+                      )).toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          // ✅ Task Files (رفعها العميل عند إنشاء الطلب)
+          if (_taskFiles.isNotEmpty) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: isDark ? const Color(0xFF1E293B) : Colors.white, borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Client Attachments (from request)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _taskFiles.map((file) => GestureDetector(
+                      onTap: () => _openFile(file['url'] ?? ''),
+                      child: Chip(
+                        label: Text(file['name'] ?? 'File', style: const TextStyle(fontSize: 11)),
+                        avatar: const Icon(Icons.attach_file, size: 14),
+                        backgroundColor: AppTheme.primary.withOpacity(0.1),
+                      ),
+                    )).toList(),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
 
           // Action Buttons
           if (!_completed)
@@ -798,22 +897,38 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
-                    children: _attachments.map((att) => Chip(
-                      label: Text(att['type'] == 'image' ? "📷 Photo" : (att['type'] == 'video' ? "🎥 Video" : "🎤 Voice")),
-                      avatar: att['type'] == 'image' ? const Icon(Icons.image, size: 16) : (att['type'] == 'video' ? const Icon(Icons.videocam, size: 16) : const Icon(Icons.mic, size: 16)),
+                    children: _attachments.map((att) => GestureDetector(
+                      onTap: () => _openFile(att['url'] ?? ''),
+                      child: Chip(
+                        label: Text(att['type'] == 'image' ? "📷 Photo" : (att['type'] == 'video' ? "🎥 Video" : "🎤 Voice")),
+                        avatar: att['type'] == 'image' ? const Icon(Icons.image, size: 16) : (att['type'] == 'video' ? const Icon(Icons.videocam, size: 16) : const Icon(Icons.mic, size: 16)),
+                      ),
                     )).toList(),
                   ),
                 ],
               ),
             ),
 
-          // Map Placeholder (يمكن استبداله بخريطة فعلية)
+          // Map Placeholder
           Container(
             margin: const EdgeInsets.only(top: 16),
             height: 200,
             decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(16)),
             child: const Center(child: Text("📍 Location tracking active", style: TextStyle(color: Colors.grey))),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 100, child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))),
+          Expanded(child: Text(value, style: const TextStyle(fontSize: 12))),
         ],
       ),
     );

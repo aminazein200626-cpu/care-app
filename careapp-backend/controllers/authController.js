@@ -4,25 +4,25 @@ const ServiceProvider = require('../models/ServiceProvider');
 const Client = require('../models/Client');
 const Providing = require('../models/Providing');
 const InscriptionRequest = require('../models/InscriptionRequest');
+const Document = require('../models/Document');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
 const sendEmail = async (to, subject, text) => {
-  // تحقق من وجود بيانات الاعتماد
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.error('❌ EMAIL_USER or EMAIL_PASS not set in .env');
+    console.error('EMAIL_USER or EMAIL_PASS not set in .env');
     return;
   }
 
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
-    port: 465,          // ✅ غيّر إلى 465 مع secure true
-    secure: true,       // ✅ استخدم SSL
+    port: 465,
+    secure: true,
     auth: {
       user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,  // كلمة مرور التطبيق
+      pass: process.env.EMAIL_PASS,
     },
   });
 
@@ -35,9 +35,9 @@ const sendEmail = async (to, subject, text) => {
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent to ${to} - Message ID: ${info.messageId}`);
+    console.log(`Email sent to ${to} - Message ID: ${info.messageId}`);
   } catch (error) {
-    console.error(`❌ Error sending email to ${to}:`, error.message);
+    console.error(`Error sending email to ${to}:`, error.message);
     console.error('Full error:', error);
   }
 };
@@ -52,7 +52,7 @@ const generateToken = (userId, role, email) => {
   );
 };
 
-// ==================== تسجيل عميل جديد ====================
+// ==================== Register a new client ====================
 exports.register = async (req, res) => {
   try {
     const { 
@@ -113,6 +113,20 @@ exports.register = async (req, res) => {
         status: 'active'
       });
       await newClient.save();
+
+      // Save ID card image to Document collection
+      if (req.file) {
+        const document = new Document({
+          clientId: newClient._id,
+          name: req.file.originalname,
+          link: req.file.path,
+          type: 'idCard',
+          mimeType: req.file.mimetype,
+          size: req.file.size
+        });
+        await document.save();
+        console.log(`ID card saved for client ${newClient._id}`);
+      }
     }
 
     res.status(201).json({ 
@@ -125,72 +139,71 @@ exports.register = async (req, res) => {
   }
 };
 
-// ==================== تسجيل الدخول ====================
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
+    email = email.toLowerCase().trim();
+
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
     }
-    
+
     const account = await Account.findOne({ email });
     if (!account) {
+      console.log(`❌ Account not found: ${email}`);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
-    
+
     let isValid = false;
     if (account.password) {
       isValid = await bcrypt.compare(password, account.password);
     } else if (account.psw) {
       isValid = await bcrypt.compare(password, account.psw);
-    } else {
-      return res.status(401).json({ message: 'Invalid credentials' });
     }
-    
+
     if (!isValid) {
+      console.log(`❌ Invalid password for: ${email}`);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
-    
+
     let user = await User.findOne({ email });
     if (!user) {
+      // إنشاء مستخدم افتراضي إذا لم يكن موجوداً (لأغراض التوافق)
       user = new User({
-        username: email.split('@')[0],
+        fullName: email.split('@')[0],
         email: email,
         passwordHash: account.password || account.psw,
-        tel: '',
-        role: 'Client'
+        phoneNumber: '',
+        role: 'AuthorizedPerson'
       });
       await user.save();
+      console.log(`🆕 Created missing user for ${email}`);
     }
-    
+
     if (user.role === 'Provider' && !user.isVerified) {
-      return res.status(401).json({ message: 'Your account is pending admin approval. Please wait.' });
+      return res.status(401).json({ message: 'Your account is pending admin approval.' });
     }
-    
+
     const adminEmails = ['admin@careapp.com', 'admin@example.com'];
-    if (adminEmails.includes(email) && user.role !== 'Admin') {
-      user.role = 'Admin';
-      await user.save();
-    }
-    
-    const secret = process.env.JWT_SECRET || 'my_super_secret_key_12345';
-    const finalRole = adminEmails.includes(email) ? 'Admin' : (user.role || 'Client');
+    const finalRole = adminEmails.includes(email) ? 'Admin' : user.role;
     const token = jwt.sign(
       { userId: user._id, role: finalRole, email: user.email, isAdmin: finalRole === 'Admin' },
-      secret,
+      process.env.JWT_SECRET || 'my_super_secret_key_12345',
       { expiresIn: '7d' }
     );
-    
+
     account.lastLogin = new Date();
     await account.save();
-    
+
+    console.log(`✅ Login successful: ${email} (${finalRole})`);
+
     res.json({
       token,
       userId: user._id,
       role: finalRole,
-      name: user.username || user.fullName || email.split('@')[0],
+      name: user.fullName || user.username || email.split('@')[0],
       email: user.email,
-      phoneNumber: user.tel || user.phoneNumber || ''
+      phoneNumber: user.phoneNumber || ''
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -198,7 +211,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// ==================== تسجيل مزود جديد ====================
+// ==================== Register a new provider ====================
 exports.registerProvider = async (req, res) => {
   try {
     const {
@@ -209,7 +222,7 @@ exports.registerProvider = async (req, res) => {
       travelEnabled, availabilitySlots
     } = req.body;
     
-    console.log('📞 Phone number received:', phoneNumber);
+    console.log('Phone number received:', phoneNumber);
     const cleanEmail = email ? email.trim().toLowerCase() : '';
     
     if (!fullName || !cleanEmail || !password || !phoneNumber) {
@@ -267,36 +280,6 @@ exports.registerProvider = async (req, res) => {
     });
     await user.save();
 
-    const documents = [];
-    const certificates = [];
-    let profilePicturePath = '';
-
-    if (req.files && req.files.length > 0) {
-      for (const file of req.files) {
-        if (file.fieldname === 'profilePicture') {
-          profilePicturePath = file.path;
-          await User.findByIdAndUpdate(user._id, { profilePicture: profilePicturePath });
-        } 
-        else if (file.fieldname === 'idCard' || file.fieldname === 'license') {
-          documents.push({ 
-            type: file.fieldname,
-            name: file.originalname,
-            path: file.path,
-            size: file.size,
-            uploadedAt: new Date()
-          });
-        } 
-        else if (file.fieldname.startsWith('certificate')) {
-          certificates.push({ 
-            name: file.originalname,
-            path: file.path,
-            size: file.size,
-            uploadedAt: new Date()
-          });
-        }
-      }
-    }
-
     const travelEnabledValue = travelEnabled === true || travelEnabled === 'true';
     
     let travelDistanceValue = 0;
@@ -329,8 +312,8 @@ exports.registerProvider = async (req, res) => {
       workOutsideCity: travelEnabledValue,
       services: parsedServices,
       categoryId: categoryId || null,
-      documents: documents,
-      certificates: certificates,
+      documents: [],   // Will be populated from Document table when needed
+      certificates: [], // Will be populated from Document table when needed
       status: 'pending',
       motivation: motivation || '',
       averageRating: 0,
@@ -341,22 +324,45 @@ exports.registerProvider = async (req, res) => {
       updatedAt: new Date()
     });
     await provider.save();
-    console.log('✅ Provider saved with ID:', provider._id); 
+    console.log('Provider saved with ID:', provider._id); 
     
     if (!provider._id) {
-      console.error('❌ Provider _id is null!');
+      console.error('Provider _id is null!');
       return res.status(500).json({ message: 'Failed to create provider' });
     }
 
-    // ✅ إنشاء سجل في InscriptionRequest
+    // Save all uploaded files to Document collection
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        let docType = '';
+        if (file.fieldname === 'profilePicture') docType = 'profilePicture';
+        else if (file.fieldname === 'idCard') docType = 'idCard';
+        else if (file.fieldname === 'license') docType = 'license';
+        else if (file.fieldname.startsWith('certificate')) docType = 'certificate';
+        else continue;
+
+        const document = new Document({
+          providerId: provider._id,
+          name: file.originalname,
+          link: file.path,
+          type: docType,
+          mimeType: file.mimetype,
+          size: file.size
+        });
+        await document.save();
+        console.log(`Document saved: ${file.originalname} for provider ${provider._id}`);
+      }
+    }
+
+    // Create InscriptionRequest
     const inscriptionRequest = new InscriptionRequest({
       providerId: provider._id,
-      adminId: null, // سيتم تعيينه عند معالجة الطلب من قبل الأدمن
+      adminId: null,
       status: 'pending',
       submitted_at: new Date()
     });
     await inscriptionRequest.save();
-    console.log('✅ InscriptionRequest created with ID:', inscriptionRequest._id);
+    console.log('InscriptionRequest created with ID:', inscriptionRequest._id);
 
     if (availabilitySlotsParsed.length > 0) {
       for (const slot of availabilitySlotsParsed) {
@@ -384,7 +390,7 @@ exports.registerProvider = async (req, res) => {
       });
     }
 
-    // ✅ إرسال إيميل ترحيب للمزود
+    // Send welcome email to provider
     try {
       const emailSubject = 'Provider Registration Received';
       const emailText = `Dear ${fullName},\n\nThank you for registering as a provider on CareApp.\n\nYour application has been submitted and is now pending review by our admin team. You will receive an email notification once your account is approved.\n\nBest regards,\nCareApp Team`;
@@ -400,7 +406,7 @@ exports.registerProvider = async (req, res) => {
   }
 };
 
-// ==================== تغيير كلمة المرور ====================
+// ==================== Change password ====================
 exports.changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -430,7 +436,7 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-// ==================== طلب إعادة تعيين كلمة المرور ====================
+// ==================== Request password reset ====================
 exports.requestPasswordReset = async (req, res) => {
   try {
     const { email } = req.body;
@@ -460,7 +466,7 @@ exports.requestPasswordReset = async (req, res) => {
   }
 };
 
-// ==================== إعادة تعيين كلمة المرور ====================
+// ==================== Reset password ====================
 exports.resetPassword = async (req, res) => {
   try {
     const { token, newPassword } = req.body;
@@ -487,7 +493,7 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-// ==================== تجديد التوكن ====================
+// ==================== Refresh token ====================
 exports.refreshToken = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -509,7 +515,7 @@ exports.refreshToken = async (req, res) => {
   }
 };
 
-// ==================== التحقق من البريد الإلكتروني ====================
+// ==================== Verify email ====================
 exports.verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
@@ -529,7 +535,7 @@ exports.verifyEmail = async (req, res) => {
   }
 };
 
-// ==================== إعادة إرسال رابط التحقق ====================
+// ==================== Resend verification email ====================
 exports.resendVerification = async (req, res) => {
   try {
     const { email } = req.body;

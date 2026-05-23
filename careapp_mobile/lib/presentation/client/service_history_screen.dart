@@ -27,19 +27,14 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
     try {
       final history = await _api.getServiceHistory();
       setState(() {
-        _history = history.map((h) => ({
-          'id': h['_id'],
-          'service': h['service'],
-          'provider': h['provider'],
-          'date': h['date'],
-          'time': h['time'],
-          'price': h['price'],
-          'status': h['status'],
-        })).toList();
+        _history = history;
         _isLoading = false;
       });
     } catch (e) {
       setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load: $e'), backgroundColor: Colors.red),
+      );
     }
   }
 
@@ -59,13 +54,17 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
           ? const Center(child: CircularProgressIndicator())
           : _history.isEmpty
               ? _buildEmptyState(isDark)
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _history.length,
-                  itemBuilder: (context, index) {
-                    final service = _history[index];
-                    return _buildHistoryCard(service, isDark);
-                  },
+              : RefreshIndicator(
+                  onRefresh: _loadHistory,
+                  color: AppTheme.primary,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _history.length,
+                    itemBuilder: (context, index) {
+                      final service = _history[index];
+                      return _buildHistoryCard(service, isDark);
+                    },
+                  ),
                 ),
     );
   }
@@ -77,9 +76,7 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2)),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -104,7 +101,7 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  'Completed',
+                  service['status'],
                   style: GoogleFonts.plusJakartaSans(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.green),
                 ),
               ),
@@ -121,10 +118,12 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
               Icon(Icons.calendar_today, size: 12, color: Colors.grey[500]),
               const SizedBox(width: 4),
               Text(service['date'], style: GoogleFonts.plusJakartaSans(fontSize: 12, color: Colors.grey[500])),
-              const SizedBox(width: 16),
-              Icon(Icons.access_time, size: 12, color: Colors.grey[500]),
-              const SizedBox(width: 4),
-              Text(service['time'], style: GoogleFonts.plusJakartaSans(fontSize: 12, color: Colors.grey[500])),
+              if (service['time'].toString().isNotEmpty) ...[
+                const SizedBox(width: 16),
+                Icon(Icons.access_time, size: 12, color: Colors.grey[500]),
+                const SizedBox(width: 4),
+                Text(service['time'], style: GoogleFonts.plusJakartaSans(fontSize: 12, color: Colors.grey[500])),
+              ],
             ],
           ),
           const SizedBox(height: 8),
@@ -132,7 +131,7 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Total: ${service['price']} DZD',
+                'Total: ${service['price'].toStringAsFixed(0)} DZD',
                 style: GoogleFonts.plusJakartaSans(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.primary),
               ),
               OutlinedButton(
@@ -170,6 +169,7 @@ class _ServiceHistoryScreenState extends State<ServiceHistoryScreen> {
           Text(
             'Your completed services will appear here',
             style: GoogleFonts.plusJakartaSans(fontSize: 14, color: AppTheme.textSecondary),
+            textAlign: TextAlign.center,
           ),
         ],
       ),

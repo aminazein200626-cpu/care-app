@@ -18,7 +18,7 @@ const AdminReports = ({ isDarkMode }) => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
-      setReports(data);
+      setReports(data.reports || []);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching reports:', error);
@@ -29,7 +29,7 @@ const AdminReports = ({ isDarkMode }) => {
   const resolveReport = async (id, action, warningMessage = '') => {
     const token = localStorage.getItem('token');
     try {
-      const response = await fetch(`http://localhost:5000/api/admin/reports/${id}/resolve`, {
+      const response = await fetch(`http://localhost:5001/api/admin/reports/${id}/resolve`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -91,9 +91,9 @@ const AdminReports = ({ isDarkMode }) => {
 
   const filteredReports = reports.filter(report => {
     const matchesSearch = 
-      report.sender.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      report.target.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      report.reason.toLowerCase().includes(searchTerm.toLowerCase());
+      report.sender?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.target?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.reason?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesDate = dateFilter === "" || report.date === dateFilter;
     const matchesStatus = statusFilter === "All" || report.status === statusFilter;
@@ -305,8 +305,15 @@ const AdminReports = ({ isDarkMode }) => {
           }}>
             <h3 style={{ color: theme.accent, marginBottom: '15px', fontSize: '22px' }}>Incident Tracking</h3>
             <div style={{ backgroundColor: '#050505', padding: '20px', borderRadius: '15px', textAlign: 'left', marginBottom: '30px', border: '1px solid #1f1f1f' }}>
-              <label style={{ fontSize: '10px', color: theme.accent, display: 'block', marginBottom: '10px', letterSpacing: '1px' }}>TRACKING INFORMATION</label>
-              <p style={{ fontSize: '14px', lineHeight: '1.6', opacity: 0.8, margin: 0 }}>{selectedReport.details}</p>
+              <label style={{ fontSize: '10px', color: theme.accent, display: 'block', marginBottom: '10px', letterSpacing: '1px' }}>REPORT DETAILS</label>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Reason:</strong> {selectedReport.reason}</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Description:</strong> {selectedReport.description || 'No description provided'}</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Sender:</strong> {selectedReport.sender} ({selectedReport.senderEmail})</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Target:</strong> {selectedReport.target} ({selectedReport.targetEmail})</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Date:</strong> {selectedReport.date}</p>
+              {selectedReport.adminResponse && (
+                <p style={{ fontSize: '13px', margin: '5px 0', color: theme.accent }}><strong>Admin Response:</strong> {selectedReport.adminResponse}</p>
+              )}
             </div>
             
             {!showWarningForm ? (

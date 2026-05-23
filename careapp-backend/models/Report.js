@@ -1,12 +1,45 @@
 const mongoose = require('mongoose');
 
 const reportSchema = new mongoose.Schema({
-  id_reporter: { type: String, ref: 'Account', required: true },
-  id_reported: { type: String, ref: 'Account', required: true },
-  reason: String,
-  description: String,
-  created_at: { type: Date, default: Date.now }
+  reporterId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  reportedId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  reason: {
+    type: String,
+    required: true
+  },
+  description: {
+    type: String,
+    default: ''
+  },
+  status: {
+    type: String,
+    enum: ['Pending', 'Review', 'Resolved'],
+    default: 'Pending'
+  },
+  action: {
+    type: String,
+    enum: ['warning', 'ban', 'ignore'],
+    default: null
+  },
+  adminResponse: {
+    type: String,
+    default: ''
+  },
+  resolvedAt: {
+    type: Date
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
 });
-reportSchema.index({ id_reporter: 1, id_reported: 1, created_at: 1 }, { unique: true });
 
 module.exports = mongoose.model('Report', reportSchema);

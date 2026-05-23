@@ -31,7 +31,7 @@ import 'presentation/client/service_history_screen.dart';
 import 'presentation/client/help_center_screen.dart';
 import 'presentation/client/change_password_screen.dart';
 
-// NEW Client Screens
+// New Client Screens
 import 'presentation/client/select_dependant_screen.dart';
 import 'presentation/client/availability_screen.dart';
 import 'presentation/client/add_tasks_before_booking_screen.dart';
@@ -52,15 +52,14 @@ import 'presentation/provider/notifications_page.dart';
 import 'presentation/provider/change_password_page.dart';
 import 'presentation/provider/edit_profile_page.dart';
 
-// NEW Provider Screens
+// New Provider Screens
 import 'presentation/provider/booking_requests_screen.dart';
 
 // Authorized Screens
 import 'presentation/authorized/authorized_dashboard.dart';
-import 'presentation/authorized/authorized_tracking_screen.dart';
-import 'presentation/authorized/authorized_profile_screen.dart';
-import 'presentation/authorized/authorized_chat_screen.dart' as authorized_chat;
 import 'presentation/authorized/authorized_notifications_screen.dart';
+import 'presentation/authorized/authorized_profile_screen.dart';
+import 'presentation/authorized/authorized_tracking_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -140,10 +139,14 @@ class CareApp extends StatelessWidget {
       case AppRoutes.clientTracking:
         if (args != null && args is Map && args.containsKey('bookingId')) {
           return MaterialPageRoute(
-            builder: (_) => TrackingScreen(bookingId: args['bookingId']),
+            builder: (_) => TrackingScreen(
+              bookingId: args['bookingId'],
+            ),
           );
         }
-        return MaterialPageRoute(builder: (_) => const TrackingScreen(bookingId: ''));
+        return MaterialPageRoute(
+          builder: (_) => const TrackingScreen(bookingId: ''),
+        );
       case AppRoutes.paymentScreen:
         return MaterialPageRoute(builder: (_) => const PaymentScreen());
       case AppRoutes.clientFeedback:
@@ -188,6 +191,7 @@ class CareApp extends StatelessWidget {
               providerId: args['providerId'] as String? ?? '',
               providerName: args['providerName'] as String? ?? '',
               serviceName: args['serviceName'] as String? ?? '',
+              hourlyRate: (args['hourlyRate'] as num?)?.toDouble() ?? 0.0,
             ),
           );
         }
@@ -202,6 +206,7 @@ class CareApp extends StatelessWidget {
               serviceName: args['serviceName'] as String? ?? '',
               dependantId: args['dependantId'] as String? ?? '',
               dependantName: args['dependantName'] as String? ?? '',
+              hourlyRate: (args['hourlyRate'] as num?)?.toDouble() ?? 0.0,
             ),
           );
         }
@@ -213,7 +218,6 @@ class CareApp extends StatelessWidget {
           if (args['selectedSlot'] is Map) {
             selectedSlot = Map<String, dynamic>.from(args['selectedSlot']);
           } else if (args['selectedSlot'] is String) {
-            // إذا كانت القيمة نصاً، يمكن تحويلها إلى خريطة فارغة
             selectedSlot = {};
           }
           return MaterialPageRoute(
@@ -227,6 +231,8 @@ class CareApp extends StatelessWidget {
               selectedSlot: selectedSlot,
               location: args['location'] as String? ?? '',
               notes: args['notes'] as String? ?? '',
+              startTimestamp: args['startTimestamp'] as int? ?? 0,
+              endTimestamp: args['endTimestamp'] as int? ?? 0,
             ),
           );
         }
@@ -269,43 +275,22 @@ class CareApp extends StatelessWidget {
       // ==================== AUTHORIZED SCREENS ====================
       case AppRoutes.authorizedDashboard:
         return MaterialPageRoute(builder: (_) => const AuthorizedDashboard());
+
       case AppRoutes.authorizedTracking:
-        if (args != null && args is Map) {
+        if (args != null && args is Map && args.containsKey('serviceId')) {
           return MaterialPageRoute(
             builder: (_) => AuthorizedTrackingScreen(
-              serviceId: args['serviceId']?.toString() ?? '',
-              serviceName: args['serviceName']?.toString() ?? '',
-              providerName: args['providerName']?.toString() ?? '',
+              serviceId: args['serviceId'] as String,
             ),
           );
         }
         return MaterialPageRoute(
-          builder: (_) => const AuthorizedTrackingScreen(
-            serviceId: '',
-            serviceName: '',
-            providerName: '',
-          ),
+          builder: (_) => const AuthorizedTrackingScreen(serviceId: ''),
         );
+
       case AppRoutes.authorizedProfile:
         return MaterialPageRoute(builder: (_) => const AuthorizedProfileScreen());
-      case AppRoutes.authorizedChat:
-        if (args != null && args is Map) {
-          return MaterialPageRoute(
-            builder: (_) => authorized_chat.AuthorizedChatScreen(
-              serviceId: args['serviceId']?.toString() ?? '',
-              providerName: args['providerName']?.toString() ?? '',
-              providerId: args['providerId']?.toString() ?? '',
-              providerAvatar: args['providerAvatar']?.toString(),
-            ),
-          );
-        }
-        return MaterialPageRoute(
-          builder: (_) => const authorized_chat.AuthorizedChatScreen(
-            serviceId: '',
-            providerName: '',
-            providerId: '',
-          ),
-        );
+
       case AppRoutes.authorizedNotifications:
         return MaterialPageRoute(builder: (_) => const AuthorizedNotificationsScreen());
 

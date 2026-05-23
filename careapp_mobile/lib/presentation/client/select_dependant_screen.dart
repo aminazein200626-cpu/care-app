@@ -7,12 +7,14 @@ class SelectDependantScreen extends StatefulWidget {
   final String providerId;
   final String providerName;
   final String serviceName;
+  final double hourlyRate; // ✅ جديد: السعر لكل ساعة
 
   const SelectDependantScreen({
     super.key,
     required this.providerId,
     required this.providerName,
     required this.serviceName,
+    required this.hourlyRate, // ✅ مطلوب
   });
 
   @override
@@ -63,6 +65,7 @@ class _SelectDependantScreenState extends State<SelectDependantScreen> {
         'providerId': widget.providerId,
         'providerName': widget.providerName,
         'serviceName': widget.serviceName,
+        'hourlyRate': widget.hourlyRate, // ✅ تمرير السعر
         'dependantId': _selectedDependantId,
         'dependantName': _selectedDependantName,
       },

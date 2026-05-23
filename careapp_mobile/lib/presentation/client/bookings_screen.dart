@@ -43,6 +43,23 @@ class Booking {
   });
 
   factory Booking.fromJson(Map<String, dynamic> json) {
+    // تأكد من أن json هو Map وليس أي نوع آخر
+    if (json is! Map<String, dynamic>) {
+      return Booking(
+        id: '',
+        serviceType: '',
+        providerName: '',
+        providerAvatar: '',
+        date: '',
+        time: '',
+        location: '',
+        price: 0.0,
+        status: BookingStatus.pending,
+        dependantName: '',
+        notes: '',
+      );
+    }
+
     BookingStatus parseStatus(String status) {
       switch (status.toLowerCase()) {
         case 'confirmed':
@@ -58,18 +75,25 @@ class Booking {
       }
     }
 
+    double rawPrice = 0.0;
+    if (json['totalPrice'] != null) {
+      rawPrice = (json['totalPrice'] as num).toDouble();
+    } else if (json['price'] != null) {
+      rawPrice = (json['price'] as num).toDouble();
+    }
+
     return Booking(
-      id: json['_id'] ?? json['id'] ?? '',
-      serviceType: json['service'] ?? json['serviceType'] ?? '',
-      providerName: json['provider'] ?? json['providerName'] ?? '',
-      providerAvatar: json['providerAvatar'] ?? '',
-      date: json['date'] ?? '',
-      time: json['time'] ?? '',
-      location: json['location'] ?? '',
-      price: (json['price'] ?? 0).toDouble(),
-      status: parseStatus(json['status'] ?? 'pending'),
-      dependantName: json['dependantName'] ?? '',
-      notes: json['notes'] ?? '',
+      id: json['_id']?.toString() ?? json['id']?.toString() ?? '',
+      serviceType: json['service']?.toString() ?? json['serviceType']?.toString() ?? '',
+      providerName: json['provider']?.toString() ?? json['providerName']?.toString() ?? '',
+      providerAvatar: json['providerAvatar']?.toString() ?? '',
+      date: json['date']?.toString() ?? '',
+      time: json['time']?.toString() ?? '',
+      location: json['location']?.toString() ?? '',
+      price: rawPrice,
+      status: parseStatus(json['status']?.toString() ?? 'pending'),
+      dependantName: json['dependantName']?.toString() ?? '',
+      notes: json['notes']?.toString() ?? '',
       halfPaid: json['halfPaid'] == true,
       remainingAmount: (json['remainingAmount'] ?? 0).toDouble(),
     );
@@ -140,10 +164,28 @@ class _BookingsScreenState extends State<BookingsScreen>
     try {
       final bookingsData = await _api.getBookings();
       if (!mounted) return;
+      
+      // تصفية البيانات للتأكد من أن كل عنصر هو Map
+      final List<Map<String, dynamic>> safeBookings = [];
+      for (var item in bookingsData) {
+        if (item is Map<String, dynamic>) {
+          safeBookings.add(item);
+        } else if (item is Map) {
+          safeBookings.add(Map<String, dynamic>.from(item));
+        }
+        // تجاهل أي عنصر ليس Map (مثل String)
+      }
+      
       setState(() {
-        _bookings = bookingsData.map((b) => Booking.fromJson(b)).toList();
+        _bookings = safeBookings.map((b) => Booking.fromJson(b)).toList();
         _isLoading = false;
       });
+      
+      // Debug: print remaining amounts
+      print('=== Bookings loaded ===');
+      for (var b in _bookings) {
+        print('Booking ${b.id}: status=${b.status}, remainingAmount=${b.remainingAmount}');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -154,19 +196,21 @@ class _BookingsScreenState extends State<BookingsScreen>
   Future<void> _payRemaining(Booking booking) async {
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
-    try {
-      final result = await _api.payRemaining(booking.id);
-      if (result['success'] == true) {
-        _showSnackBar('Payment successful!', Colors.green);
-        await _loadBookings(); // تحديث القائمة
-        _showRatingDialog(booking);
-      } else {
-        _showSnackBar(result['message'] ?? 'Payment failed', Colors.red);
-      }
-    } catch (e) {
-      _showSnackBar('Error: $e', Colors.red);
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
+    
+    if (mounted) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PaymentScreen(initialBookingId: booking.id),
+        ),
+      );
+      // Reload data after returning from payment screen
+      await _loadBookings();
+      // Force UI rebuild (even though setState is already in _loadBookings)
+      setState(() {});
+      setState(() => _isProcessing = false);
+    } else {
+      setState(() => _isProcessing = false);
     }
   }
 
@@ -649,7 +693,6 @@ class _BookingsScreenState extends State<BookingsScreen>
             const SizedBox(height: 6),
             _infoChip(Icons.location_on_outlined, booking.location),
             
-            // زر دفع نصف المبلغ
             if (needsHalfPayment) ...[
               const SizedBox(height: 14),
               SizedBox(
@@ -668,7 +711,6 @@ class _BookingsScreenState extends State<BookingsScreen>
               ),
             ],
             
-            // زر دفع الرصيد المتبقي
             if (needsRemainingPayment) ...[
               const SizedBox(height: 14),
               SizedBox(
@@ -678,7 +720,7 @@ class _BookingsScreenState extends State<BookingsScreen>
                   icon: const Icon(Icons.payment, size: 18),
                   label: Text("Pay Remaining (${booking.remainingAmount.toStringAsFixed(0)} DZD)"),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
+                    backgroundColor: AppTheme.primary,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(vertical: 12),
@@ -687,7 +729,6 @@ class _BookingsScreenState extends State<BookingsScreen>
               ),
             ],
             
-            // أزرار Cancel و Track (للحجوزات غير الملغاة)
             if (booking.status != BookingStatus.cancelled) ...[
               const SizedBox(height: 14),
               Row(

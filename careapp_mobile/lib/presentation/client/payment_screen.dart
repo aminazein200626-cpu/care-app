@@ -4,7 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/app_theme.dart';
 import '../../services/client_api_service.dart';
-import 'tracking_screen.dart';
+import 'tracking_screen.dart';  // ✅ استبدلنا import
 
 class PaymentScreen extends StatefulWidget {
   final String? initialBookingId;
@@ -109,6 +109,8 @@ class _PaymentScreenState extends State<PaymentScreen>
           else if (p['amount'] is String) amount = double.tryParse(p['amount']) ?? 0;
           else if (p['amount'] is num) amount = (p['amount'] as num).toDouble();
           
+          print('Pending payment amount: $amount');
+          
           return {
             'id': p['_id'],
             'bookingId': p['bookingId'],
@@ -123,6 +125,7 @@ class _PaymentScreenState extends State<PaymentScreen>
         
         _remainingPayments = remaining.map((b) {
           double amount = (b['remainingAmount'] ?? 0).toDouble();
+          print('Remaining payment amount: $amount');
           return {
             'id': b['_id'],
             'bookingId': b['_id'],
@@ -171,19 +174,20 @@ class _PaymentScreenState extends State<PaymentScreen>
   }
 
   void _selectDefaultPayment() {
-    // تحديد التبويب المناسب
     if (_pendingPayments.isNotEmpty) {
       _selectedTab = 0;
       _selectedBookingId = _pendingPayments[0]['bookingId'].toString();
       _selectedAmount = _pendingPayments[0]['amount'];
       _isRemaining = false;
       _updateProviderBankFromSelected();
+      print('Selected pending amount: $_selectedAmount');
     } else if (_remainingPayments.isNotEmpty) {
       _selectedTab = 2;
       _selectedBookingId = _remainingPayments[0]['bookingId'].toString();
       _selectedAmount = _remainingPayments[0]['amount'];
       _isRemaining = true;
       _updateProviderBankFromSelected();
+      print('Selected remaining amount: $_selectedAmount');
     } else {
       _selectedBookingId = '';
       _selectedAmount = 0;
@@ -272,22 +276,21 @@ class _PaymentScreenState extends State<PaymentScreen>
       }
       
       if (_isRemaining) {
-        // دفع الرصيد المتبقي
         final result = await _api.payRemaining(_selectedBookingId);
         if (mounted) {
-          _showSnackBar('✅ Remaining payment successful! Amount: ${result['remainingAmount']} DZD', Colors.green);
-          // بعد دفع المتبقي، عرض نافذة تقييم المزود
+          _showSnackBar('✅ Remaining payment successful!', Colors.green);
+          await _loadData();
           _showRatingDialog(_selectedBookingId);
         }
       } else {
-        // نصف الدفع
         final result = await _api.payHalf(_selectedBookingId, _selectedMethod, paymentDetails);
         if (mounted) {
-          _showSnackBar('✅ Half payment successful! Tracking started. Remaining: ${result['remainingAmount']} DZD', Colors.green);
+          _showSnackBar('✅ Half payment successful! Tracking started.', Colors.green);
+          await _loadData();
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (_) => TrackingScreen(bookingId: _selectedBookingId),
+              builder: (_) => TrackingScreen(bookingId: _selectedBookingId), // ✅ تغيير مؤقت
             ),
           );
         }
@@ -335,7 +338,6 @@ class _PaymentScreenState extends State<PaymentScreen>
             TextButton(
               onPressed: () {
                 Navigator.pop(ctx);
-                // العودة إلى شاشة الحجوزات
                 Navigator.pop(context);
               },
               child: const Text("Skip"),
@@ -360,7 +362,8 @@ class _PaymentScreenState extends State<PaymentScreen>
       if (mounted) {
         if (result['success'] == true) {
           _showSnackBar('Thank you for your feedback!', Colors.green);
-          Navigator.pop(context); // العودة من PaymentScreen إلى BookingsScreen
+          await _loadData();
+          Navigator.pop(context);
         } else {
           _showError(result['message'] ?? 'Failed to submit rating');
         }
@@ -428,10 +431,9 @@ class _PaymentScreenState extends State<PaymentScreen>
   Widget _tabButton(String title, int index) {
     final isSelected = _selectedTab == index;
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
         setState(() {
           _selectedTab = index;
-          // عند تغيير التبويب، حدد أول عنصر في القائمة الجديدة
           if (index == 0 && _pendingPayments.isNotEmpty) {
             _selectedBookingId = _pendingPayments[0]['bookingId'].toString();
             _selectedAmount = _pendingPayments[0]['amount'];
@@ -570,7 +572,6 @@ class _PaymentScreenState extends State<PaymentScreen>
                     },
                   ),
                   
-                  // Provider's bank details
                   if (_providerCcp.isNotEmpty || _providerBankName.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     Container(
@@ -623,7 +624,6 @@ class _PaymentScreenState extends State<PaymentScreen>
                   ),
                   const SizedBox(height: 20),
                   
-                  // باقي الحقول (نفس الكود الأصلي)
                   if (_selectedMethod == 'Edahabia') ...[
                     TextFormField(
                       controller: _cardHolderCtrl,

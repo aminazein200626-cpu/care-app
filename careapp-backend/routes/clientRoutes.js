@@ -12,13 +12,85 @@ const Report = require('../models/Report');
 const BookingRequest = require('../models/BookingRequest');
 const Payment = require('../models/Payment');
 const ServiceProvider = require('../models/ServiceProvider');
+const Feedback = require('../models/Feedback');
 const clientController = require('../controllers/clientController');
 
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const nodemailer = require('nodemailer');
 
-// إعداد تخزين الملفات للمعالين
+// ==================== دوال مساعدة لتطبيع البيانات ====================
+function normalizeArray(field) {
+  if (Array.isArray(field)) return field;
+  if (typeof field === 'string') {
+    try {
+      const parsed = JSON.parse(field);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(e) { return []; }
+  }
+  return [];
+}
+
+function normalizeObject(field) {
+  if (field && typeof field === 'object' && !Array.isArray(field)) return field;
+  if (typeof field === 'string') {
+    try {
+      const parsed = JSON.parse(field);
+      return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch(e) { return {}; }
+  }
+  return {};
+}
+
+function normalizeStageTimes(stageTimes) {
+  if (!stageTimes) return {};
+  if (Array.isArray(stageTimes)) {
+    const stageNames = [
+      "Request Accepted", "Provider On The Way", "Provider Arrived",
+      "Service Started", "In Progress", "Almost Done", "Completed"
+    ];
+    const obj = {};
+    for (let i = 0; i < stageTimes.length && i < stageNames.length; i++) {
+      obj[stageNames[i]] = stageTimes[i];
+    }
+    return obj;
+  }
+  if (typeof stageTimes === 'object') {
+    const obj = {};
+    for (const [key, value] of Object.entries(stageTimes)) {
+      if (!key.startsWith('_')) {
+        obj[key.toString()] = value;
+      }
+    }
+    return obj;
+  }
+  return {};
+}
+
+async function sendEmail(to, subject, text) {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+    const info = await transporter.sendMail({
+      from: `"CareApp Support" <${process.env.EMAIL_USER}>`,
+      to: to,
+      subject: subject,
+      text: text,
+    });
+    console.log(`Email sent to ${to}: ${info.messageId}`);
+  } catch (error) {
+    console.error(`Failed to send email to ${to}:`, error.message);
+  }
+}
+
 const dependentStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = 'uploads/dependents';
@@ -32,6 +104,19 @@ const dependentStorage = multer.diskStorage({
 });
 const uploadDependentFiles = multer({ storage: dependentStorage }).array('files', 10);
 
+const bookingRequestsStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'uploads/booking-requests';
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'booking-file-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const uploadBookingFiles = multer({ storage: bookingRequestsStorage });
+
 router.use(authMiddleware);
 
 router.get('/profile', async (req, res) => {
@@ -41,6 +126,27 @@ router.get('/profile', async (req, res) => {
     const account = await Account.findOne({ email: user.email });
     res.json({ ...user.toObject(), accountStatus: account?.status || 'active', nbReceiving: account?.nb_receiving || 0 });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/profile/:userId', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select('-passwordHash');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({
+      fullName: user.fullName,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      address: user.address,
+      wilaya: user.wilaya,
+      profilePicture: user.profilePicture,
+      createdAt: user.createdAt,
+      role: user.role
+    });
+  } catch (error) {
+    console.error('Error fetching user profile by ID:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -76,115 +182,90 @@ router.get('/dependents', async (req, res) => {
   }
 });
 
-router.post('/dependents', authMiddleware, (req, res) => {
-  uploadDependentFiles(req, res, async (err) => {
-    if (err) {
-      console.error('Multer error:', err);
-      return res.status(400).json({ message: 'File upload error: ' + err.message });
-    }
-
-    try {
-      const { fullName, relationship, dateOfBirth, nationalId, healthNotes } = req.body;
-      
-      if (!fullName || !relationship || !dateOfBirth) {
-        return res.status(400).json({ message: 'Missing required fields: fullName, relationship, dateOfBirth' });
-      }
-
-      const dependentData = {
-        clientId: req.user.userId,
-        fullName,
-        relationship,
-        dateOfBirth: new Date(dateOfBirth),
-        nationalId: nationalId || '',
-        healthNotes: healthNotes || '',
-        files: []
-      };
-
-      if (req.files && req.files.length > 0) {
-        dependentData.files = req.files.map(file => ({
-          filename: file.originalname,
-          url: `/uploads/dependents/${file.filename}`,
-          fileType: path.extname(file.originalname).substring(1),
-          uploadedAt: new Date()
-        }));
-      }
-
-      const dependent = new Dependent(dependentData);
-      await dependent.save();
-
-      const Client = require('../models/Client');
-      await Client.findOneAndUpdate(
-        { userId: req.user.userId },
-        { $push: { dependents: dependent._id } }
-      );
-
-      res.status(201).json(dependent);
-    } catch (error) {
-      console.error('Error adding dependent:', error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-});
-
-router.put('/dependents/:id', async (req, res) => {
-  try {
-    const dependent = await Dependent.findOneAndUpdate({ _id: req.params.id, clientId: req.user.userId }, req.body, { new: true });
-    if (!dependent) return res.status(404).json({ message: 'Dependent not found' });
-    res.json(dependent);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-router.delete('/dependents/:id', async (req, res) => {
-  try {
-    const dependent = await Dependent.findOneAndDelete({ _id: req.params.id, clientId: req.user.userId });
-    if (!dependent) return res.status(404).json({ message: 'Dependent not found' });
-    res.json({ message: 'Deleted' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+router.post('/dependents', authMiddleware, uploadDependentFiles, clientController.addDependent);
+router.put('/dependents/:id', authMiddleware, uploadDependentFiles, clientController.updateDependent);
+router.delete('/dependents/:id', authMiddleware, clientController.deleteDependent);
+router.get('/dependents/:id', authMiddleware, clientController.getDependentById);
+router.get('/dependents/:id/files', authMiddleware, clientController.getDependentFiles);
+router.delete('/dependents/:dependentId/files/:fileId', authMiddleware, clientController.deleteDependentFile);
+router.post('/dependents/:dependentId/medical-info', authMiddleware, clientController.saveMedicalInfo);
+router.get('/dependents/:dependentId/medical-info', authMiddleware, clientController.getMedicalInfo);
 
 router.get('/authorized', async (req, res) => {
   try {
-    const persons = await AuthorizedPerson.find({ clientId: req.user.userId }).populate('userId', 'fullName email phoneNumber');
+    const persons = await AuthorizedPerson.find({ id_U_CL: req.user.userId }).populate('userId', 'fullName email phoneNumber');
     res.json(persons);
   } catch (error) {
+    console.error('Error fetching authorized persons:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
 router.post('/authorized', async (req, res) => {
   try {
-    const { email, fullName, phoneNumber, relationship, password, canTrack, canChat, canViewLocation } = req.body;
-    let user = await User.findOne({ email });
+    let { email, fullName, phoneNumber, relationship, password, canTrack, canChat, canViewLocation } = req.body;
     const bcrypt = require('bcryptjs');
-    if (!user) {
-      if (!password || password.length < 4) return res.status(400).json({ message: 'Password must be at least 4 characters' });
-      const account = new Account({ email, psw: await bcrypt.hash(password, 10), status: 'active', nb_receiving: 0 });
-      await account.save();
-      user = new User({ fullName, email, passwordHash: await bcrypt.hash(password, 10), accountEmail: email, phoneNumber, role: 'AuthorizedPerson', isActive: true, isVerified: true });
-      await user.save();
-    } else {
-      if (password && password.length >= 4) {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        user.passwordHash = hashedPassword;
-        await user.save();
-        await Account.findOneAndUpdate({ email }, { psw: hashedPassword });
-      }
+    email = email.toLowerCase().trim();
+    if (!email || !fullName || !password) {
+      return res.status(400).json({ message: 'Email, full name and password are required' });
     }
-    const authorized = new AuthorizedPerson({ clientId: req.user.userId, userId: user._id, fullName: fullName || user.fullName, email, phoneNumber, relationship, canTrack: canTrack ?? true, canChat: canChat ?? true, canViewLocation: canViewLocation ?? true });
-    await authorized.save();
+    if (password.length < 4) {
+      return res.status(400).json({ message: 'Password must be at least 4 characters' });
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    let account = await Account.findOne({ email });
+    if (!account) {
+      account = new Account({ email: email, password: hashedPassword, status: 'active', nb_receiving: 0, created_at: new Date(), updated_at: new Date() });
+      await account.save();
+      console.log(`Account created for ${email}`);
+    } else {
+      account.password = hashedPassword;
+      account.updated_at = new Date();
+      await account.save();
+      console.log(`Account updated for ${email}`);
+    }
+    let user = await User.findOne({ email });
+    if (!user) {
+      user = new User({ fullName: fullName, email: email, passwordHash: hashedPassword, accountEmail: email, phoneNumber: phoneNumber || '', role: 'AuthorizedPerson', isActive: true, isVerified: true });
+      await user.save();
+      console.log(`User created for ${email}`);
+    } else {
+      user.fullName = fullName;
+      user.passwordHash = hashedPassword;
+      user.phoneNumber = phoneNumber || '';
+      await user.save();
+      console.log(`User updated for ${email}`);
+    }
+    let authorized = await AuthorizedPerson.findOne({ email });
+    if (!authorized) {
+      authorized = new AuthorizedPerson({ name: fullName, phone_number: phoneNumber || '', national_id: '', id_U_CL: req.user.userId, email: email, relationship: relationship || '', canTrack: canTrack ?? true, canChat: canChat ?? true, canViewLocation: canViewLocation ?? true, userId: user._id });
+      await authorized.save();
+      console.log(`AuthorizedPerson created for ${email}`);
+    } else {
+      authorized.name = fullName;
+      authorized.phone_number = phoneNumber || '';
+      authorized.relationship = relationship || '';
+      authorized.canTrack = canTrack ?? true;
+      authorized.canChat = canChat ?? true;
+      authorized.canViewLocation = canViewLocation ?? true;
+      await authorized.save();
+      console.log(`AuthorizedPerson updated for ${email}`);
+    }
+    const client = await User.findById(req.user.userId);
+    const clientName = client ? client.fullName : 'A client';
+    const emailSubject = 'You have been added as an Authorized Person on CareApp';
+    const emailText = `Dear ${fullName},\n\nYou have been added as an authorized person by ${clientName}.\n\nYour login credentials are:\nEmail: ${email}\nPassword: ${password}\n\nPlease login to the CareApp to track services, chat, and manage appointments.\n\nBest regards,\nCareApp Team`;
+    await sendEmail(email, emailSubject, emailText);
     res.status(201).json({ message: 'Authorized person added successfully', authorized });
   } catch (error) {
+    console.error('Error adding authorized person:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
 router.delete('/authorized/:id', async (req, res) => {
   try {
-    const authorized = await AuthorizedPerson.findOneAndDelete({ _id: req.params.id, clientId: req.user.userId });
+    const authorized = await AuthorizedPerson.findOneAndDelete({ _id: req.params.id, id_U_CL: req.user.userId });
     if (!authorized) return res.status(404).json({ message: 'Authorized person not found' });
     res.json({ message: 'Deleted' });
   } catch (error) {
@@ -239,9 +320,8 @@ router.get('/bookings/:id', async (req, res) => {
       .populate('providerId', 'fullName phoneNumber profilePicture')
       .populate('serviceId', 'name price')
       .populate('dependentId');
-    
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
-    
+
     res.json({
       id: booking._id,
       provider: booking.providerId?.fullName,
@@ -264,9 +344,9 @@ router.get('/bookings/:id', async (req, res) => {
       paymentStatus: booking.paymentStatus,
       paymentMethod: booking.paymentMethod,
       dependentId: booking.dependentId,
-      clientTasks: booking.clientTasks || [],
+      clientTasks: normalizeArray(booking.clientTasks),
       trackingStage: booking.trackingStage,
-      stageTimes: booking.stageTimes || {},
+      stageTimes: normalizeObject(booking.stageTimes),
       rating: booking.rating,
       feedback: booking.feedback
     });
@@ -300,7 +380,8 @@ router.post('/bookings', async (req, res) => {
     const booking = new Booking({
       client: client.fullName, clientId: req.user.userId, clientPhone: client.phoneNumber,
       provider: provider.fullName, providerId, providerPhone: provider.phoneNumber,
-      service: service.name, serviceId, date: new Date(date), startTime: time, endTime,
+      service: service.name, serviceId,
+      date: new Date(date), startTime: time, endTime,
       location: location || client.address || 'Not specified', notes: notes || '', dependentId: dependentId || null,
       status: 'Pending', totalPrice: service.price, paymentStatus: 'Pending'
     });
@@ -322,21 +403,7 @@ router.put('/bookings/:id/cancel', async (req, res) => {
   }
 });
 
-router.post('/booking-requests', async (req, res) => {
-  try {
-    const { providerId, serviceName, date, startTime, endTime, location, notes, dependantId, tasks } = req.body;
-    const bookingRequest = new BookingRequest({
-      clientId: req.user.userId, providerId, serviceName, date, startTime, endTime,
-      location, notes, dependantId, tasks: tasks || []
-    });
-    await bookingRequest.save();
-    await Notification.create({ userId: providerId, title: 'New Booking Request', message: `You have a new request for ${serviceName} on ${date}`, type: 'booking' });
-    res.status(201).json({ message: 'Booking request sent successfully', requestId: bookingRequest._id });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
+router.post('/booking-requests', authMiddleware, uploadBookingFiles.array('files'), clientController.createBookingRequest);
 router.get('/booking-requests', async (req, res) => {
   try {
     const requests = await BookingRequest.find({ clientId: req.user.userId }).sort({ createdAt: -1 });
@@ -350,17 +417,18 @@ router.get('/tracking/:bookingId', async (req, res) => {
   try {
     const booking = await Booking.findOne({ _id: req.params.bookingId, clientId: req.user.userId });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
     res.json({
       stage: booking.trackingStage || 'Pending',
       status: booking.status,
-      workSteps: booking.workSteps || [],
-      attachments: booking.attachments || [],
-      stageTimes: booking.stageTimes || {},
+      workSteps: normalizeArray(booking.workSteps),
+      attachments: normalizeArray(booking.attachments),
+      stageTimes: normalizeObject(booking.stageTimes),
       eta: booking.eta,
       providerLat: booking.providerLat,
       providerLng: booking.providerLng,
       lastUpdate: booking.updatedAt,
-      clientTasks: booking.clientTasks || []
+      clientTasks: normalizeArray(booking.clientTasks)
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -382,16 +450,9 @@ router.post('/payments', async (req, res) => {
   }
 });
 
-// ✅ جلب المدفوعات المعلقة مع معلومات البنك للمزود
 router.get('/payments/pending', async (req, res) => {
   try {
-    const bookings = await Booking.find({
-      clientId: req.user.userId,
-      status: 'Confirmed',
-      halfPaid: false
-    }).populate('providerId', 'fullName phoneNumber profilePicture')
-      .populate('serviceId', 'name');
-    
+    const bookings = await Booking.find({ clientId: req.user.userId, status: 'Confirmed', halfPaid: false }).populate('providerId', 'fullName phoneNumber profilePicture').populate('serviceId', 'name');
     const pending = [];
     for (const booking of bookings) {
       const providerDetails = await ServiceProvider.findOne({ userid: booking.providerId });
@@ -418,34 +479,17 @@ router.get('/payments/pending', async (req, res) => {
   }
 });
 
-// ✅ تحديث نصف الدفع
 router.put('/bookings/:id/pay-half', async (req, res) => {
   try {
     const { id } = req.params;
     const { paymentMethod, clientPaymentDetails } = req.body;
-    
     const booking = await Booking.findOne({ _id: id, clientId: req.user.userId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    if (booking.paymentStatus === 'Completed') {
-      return res.status(400).json({ message: 'Already fully paid' });
-    }
-    if (booking.halfPaid) {
-      return res.status(400).json({ message: 'Half payment already made' });
-    }
-    
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (booking.paymentStatus === 'Completed') return res.status(400).json({ message: 'Already fully paid' });
+    if (booking.halfPaid) return res.status(400).json({ message: 'Half payment already made' });
     const halfAmount = booking.totalPrice / 2;
-    
-    const payment = new Payment({ 
-      bookingId: booking._id, 
-      amount: halfAmount, 
-      status: 'half_paid', 
-      payment_method: paymentMethod,
-      clientPaymentInfo: clientPaymentDetails || {}
-    });
+    const payment = new Payment({ bookingId: booking._id, amount: halfAmount, status: 'half_paid', payment_method: paymentMethod, clientPaymentInfo: clientPaymentDetails || {} });
     await payment.save();
-    
     booking.halfPaid = true;
     booking.halfAmount = halfAmount;
     booking.remainingAmount = booking.totalPrice - halfAmount;
@@ -455,91 +499,36 @@ router.put('/bookings/:id/pay-half', async (req, res) => {
     booking.stageTimes = booking.stageTimes || {};
     booking.stageTimes['Accepted'] = new Date().toISOString();
     await booking.save();
-    
-    await Notification.create({ 
-      userId: booking.providerId, 
-      title: 'Half Payment Received', 
-      message: `Client paid half (${halfAmount} DZD). Tracking has started.`, 
-      type: 'payment',
-      bookingId: booking._id
-    });
-    
-    await Notification.create({ 
-      userId: booking.clientId, 
-      title: 'Tracking Started', 
-      message: 'Your service tracking has started. You can now see live updates from the provider.', 
-      type: 'tracking',
-      bookingId: booking._id
-    });
-    
-    res.json({ 
-      message: 'Half payment successful. Tracking started.', 
-      halfAmount, 
-      remainingAmount: booking.remainingAmount,
-      trackingStage: booking.trackingStage,
-      stageTimes: booking.stageTimes
-    });
+    await Notification.create({ userId: booking.providerId, title: 'Half Payment Received', message: `Client paid half (${halfAmount} DZD). Tracking has started.`, type: 'payment', bookingId: booking._id });
+    await Notification.create({ userId: booking.clientId, title: 'Tracking Started', message: 'Your service tracking has started. You can now see live updates from the provider.', type: 'tracking', bookingId: booking._id });
+    res.json({ message: 'Half payment successful. Tracking started.', halfAmount, remainingAmount: booking.remainingAmount, trackingStage: booking.trackingStage, stageTimes: booking.stageTimes });
   } catch (error) {
     console.error('Half payment error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// ✅ دفع الرصيد المتبقي (مع تصحيح تلقائي وإرسال Socket)
 router.post('/bookings/:id/pay-remaining', async (req, res) => {
   try {
     const { id } = req.params;
     const clientId = req.user.userId;
-    
     let booking = await Booking.findOne({ _id: id, clientId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    
-    // ✅ تصحيح تلقائي: إذا كان paymentStatus = Completed ولكن remainingAmount > 0
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
     if (booking.paymentStatus === 'Completed' && booking.remainingAmount > 0) {
-      console.log('⚠️ Inconsistent data: fixing paymentStatus to HalfPaid');
+      console.log('Inconsistent data: fixing paymentStatus to HalfPaid');
       booking.paymentStatus = 'HalfPaid';
       await booking.save();
     }
-    
-    if (booking.status !== 'Completed') {
-      return res.status(400).json({ message: 'Service not yet completed' });
-    }
-    
-    if (booking.paymentStatus === 'Completed') {
-      return res.status(400).json({ message: 'Already fully paid' });
-    }
-    
+    if (booking.status !== 'Completed') return res.status(400).json({ message: 'Service not yet completed' });
+    if (booking.paymentStatus === 'Completed') return res.status(400).json({ message: 'Already fully paid' });
     const remainingAmount = booking.remainingAmount || 0;
-    if (remainingAmount <= 0) {
-      return res.status(400).json({ message: 'No remaining amount to pay' });
-    }
-    
+    if (remainingAmount <= 0) return res.status(400).json({ message: 'No remaining amount to pay' });
     booking.paymentStatus = 'Completed';
     booking.paidAt = new Date();
-    booking.remainingAmount = 0;
     await booking.save();
-    
-    await Notification.create({
-      userId: booking.providerId,
-      title: 'Remaining Payment Received',
-      message: `Client completed payment of ${remainingAmount} DZD.`,
-      type: 'payment',
-      bookingId: booking._id
-    });
-    
-    // ✅ إرسال تحديث عبر Socket.IO للمزود
+    await Notification.create({ userId: booking.providerId, title: 'Remaining Payment Received', message: `Client completed payment of ${remainingAmount} DZD.`, type: 'payment', bookingId: booking._id });
     const io = req.app.get('io');
-    if (io) {
-      io.to(`tracking_${booking._id}`).emit('trackingUpdate', {
-        bookingId: booking._id,
-        paymentStatus: 'Completed',
-        remainingAmount: 0,
-        stage: booking.trackingStage
-      });
-    }
-    
+    if (io) io.to(`tracking_${booking._id}`).emit('trackingUpdate', { bookingId: booking._id, paymentStatus: 'Completed', remainingAmount: 0, stage: booking.trackingStage });
     res.json({ success: true, message: 'Payment successful', remainingAmount });
   } catch (error) {
     console.error('Pay remaining error:', error);
@@ -547,127 +536,7 @@ router.post('/bookings/:id/pay-remaining', async (req, res) => {
   }
 });
 
-// ✅ تقييم المزود من قبل العميل (مصحح: لا يتحقق من paymentStatus، فقط من status)
-router.post('/bookings/:id/rate-provider', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { rating, comment } = req.body;
-    const clientId = req.user.userId;
-    
-    console.log(`📡 Rate provider request: bookingId=${id}, clientId=${clientId}, rating=${rating}`);
-    
-    if (!rating || rating < 1 || rating > 5) {
-      return res.status(400).json({ message: 'Rating must be between 1 and 5' });
-    }
-    
-    const booking = await Booking.findOne({ _id: id, clientId });
-    if (!booking) {
-      console.log('❌ Booking not found');
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    
-    // ✅ السماح بالتقييم إذا كانت الخدمة مكتملة فقط (لا نتحقق من paymentStatus)
-    if (booking.status !== 'Completed') {
-      console.log('❌ Service not completed');
-      return res.status(400).json({ message: 'Service not completed yet' });
-    }
-    
-    if (booking.rating) {
-      console.log('❌ Already rated');
-      return res.status(400).json({ message: 'Already rated' });
-    }
-    
-    // حفظ التقييم
-    booking.rating = rating;
-    booking.feedback = comment || '';
-    await booking.save();
-    console.log('✅ Booking rating saved');
-    
-    // تحديث متوسط التقييم للمزود
-    const allBookings = await Booking.find({
-      providerId: booking.providerId,
-      rating: { $exists: true }
-    });
-    console.log(`📊 Found ${allBookings.length} ratings for provider ${booking.providerId}`);
-    
-    const avgRating = allBookings.length > 0
-      ? allBookings.reduce((sum, b) => sum + (b.rating || 0), 0) / allBookings.length
-      : rating;
-    
-    // تحديث ServiceProvider باستخدام userid
-    const provider = await ServiceProvider.findOneAndUpdate(
-      { userid: booking.providerId },
-      { 
-        averageRating: avgRating,
-        totalReviews: allBookings.length,
-        totalServices: await Booking.countDocuments({ providerId: booking.providerId, status: 'Completed' })
-      },
-      { new: true }
-    );
-    
-    if (!provider) {
-      console.log('⚠️ ServiceProvider not found for userid:', booking.providerId);
-    } else {
-      console.log('✅ ServiceProvider updated');
-    }
-    
-    // حساب التقييمات السلبية وحظر المزود إذا لزم الأمر
-    const negativeReviews = allBookings.filter(b => b.rating <= 2).length;
-    console.log(`⭐ Negative reviews: ${negativeReviews}`);
-    
-    if (negativeReviews >= 5) {
-      const providerUser = await User.findById(booking.providerId);
-      if (providerUser && providerUser.role === 'Provider') {
-        providerUser.isActive = false;
-        await providerUser.save();
-        console.log('🚫 Provider blocked due to negative reviews');
-        
-        await Notification.create({
-          userId: booking.providerId,
-          title: 'Account Suspended',
-          message: 'Your account has been suspended due to 5 negative reviews.',
-          type: 'system'
-        });
-        
-        const admin = await User.findOne({ role: 'Admin' });
-        if (admin) {
-          await Notification.create({
-            userId: admin._id,
-            title: 'Provider Auto-Blocked',
-            message: `${providerUser.fullName} has been blocked due to 5 negative reviews.`,
-            type: 'system'
-          });
-        }
-      }
-    }
-    
-    // إشعار للمزود بأنه تم تقييمه
-    await Notification.create({
-      userId: booking.providerId,
-      title: 'You Have Been Rated',
-      message: `Client rated you ${rating} stars.${comment ? ` Comment: ${comment}` : ''}`,
-      type: 'review',
-      bookingId: booking._id
-    });
-    
-    // إشعار للأدمن (اختياري)
-    const admin = await User.findOne({ role: 'Admin' });
-    if (admin) {
-      await Notification.create({
-        userId: admin._id,
-        title: 'Provider Rated',
-        message: `${booking.client} rated provider ${booking.provider} with ${rating} stars.`,
-        type: 'review',
-        bookingId: booking._id
-      });
-    }
-    
-    res.json({ success: true, message: 'Rating submitted', averageRating: avgRating });
-  } catch (error) {
-    console.error('❌ Rate provider error:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
+router.post('/bookings/:id/rate-provider', clientController.rateProvider);
 
 router.post('/bookings/:id/tasks', async (req, res) => {
   try {
@@ -689,23 +558,35 @@ router.post('/bookings/:id/tasks', async (req, res) => {
 router.post('/feedback', async (req, res) => {
   try {
     const { bookingId, rating, comment } = req.body;
-    const booking = await Booking.findOne({ _id: bookingId, clientId: req.user.userId });
+    const clientId = req.user.userId;
+    const booking = await Booking.findOne({ _id: bookingId, clientId });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (booking.status !== 'Completed') return res.status(400).json({ message: 'Service not completed yet' });
+    if (booking.rating) return res.status(400).json({ message: 'Already rated this booking' });
+    const feedback = new Feedback({ overall_rating: rating, comment: comment || '', bookingId: booking._id, clientId: booking.clientId, providerId: booking.providerId });
+    await feedback.save();
     booking.rating = rating;
-    booking.feedback = comment;
+    booking.feedback = comment || '';
     await booking.save();
-    res.status(201).json({ message: 'Feedback submitted successfully', booking: { id: booking._id, rating: booking.rating, feedback: booking.feedback } });
+    const allRatings = await Booking.find({ providerId: booking.providerId, rating: { $exists: true } });
+    const avgRating = allRatings.length > 0 ? allRatings.reduce((sum, b) => sum + b.rating, 0) / allRatings.length : rating;
+    await ServiceProvider.findOneAndUpdate({ userid: booking.providerId }, { averageRating: avgRating, totalReviews: allRatings.length });
+    await Notification.create({ userId: booking.providerId, title: 'New Feedback', message: `Client gave you ${rating} stars: ${comment || ''}`, type: 'review', bookingId: booking._id });
+    res.status(201).json({ message: 'Feedback submitted successfully', feedback });
   } catch (error) {
+    console.error('Feedback error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
 router.get('/feedback', async (req, res) => {
   try {
-    const bookings = await Booking.find({ clientId: req.user.userId, rating: { $exists: true, $ne: null } }).populate('serviceId', 'name');
-    const feedbacks = bookings.map(b => ({ id: b._id, bookingId: b._id, service: b.serviceId?.name, rating: b.rating, comment: b.feedback, reply: b.feedbackReply, createdAt: b.createdAt }));
-    res.json(feedbacks);
+    const clientId = req.user.userId;
+    const feedbacks = await Feedback.find({ clientId }).populate('bookingId', 'service provider date').sort({ createdAt: -1 });
+    const formatted = feedbacks.map(f => ({ id: f._id, bookingId: f.bookingId?._id, service: f.bookingId?.service || 'Service', provider: f.bookingId?.provider || 'Provider', rating: f.overall_rating, comment: f.comment, reply: f.reply, createdAt: f.createdAt }));
+    res.json(formatted);
   } catch (error) {
+    console.error('Get feedback error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -749,11 +630,7 @@ router.put('/notifications/:id/read', async (req, res) => {
 
 router.get('/history', async (req, res) => {
   try {
-    const bookings = await Booking.find({ clientId: req.user.userId, status: 'Completed' })
-      .populate('providerId', 'fullName')
-      .populate('serviceId', 'name price')
-      .populate('dependentId', 'fullName')
-      .sort({ createdAt: -1 });
+    const bookings = await Booking.find({ clientId: req.user.userId, status: 'Completed' }).populate('providerId', 'fullName').populate('serviceId', 'name price').populate('dependentId', 'fullName').sort({ createdAt: -1 });
     res.json(bookings);
   } catch (error) {
     res.status(500).json({ message: error.message });

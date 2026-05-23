@@ -7,40 +7,38 @@ const dependentSchema = new mongoose.Schema({
     required: true
   },
   
-  // ==================== المعلومات الأساسية ====================
+  // ==================== Basic Information ====================
   fullName: { type: String, required: true },
- relationship: {
+  relationship: {
     type: String,
     required: true
-    
   },
   gender: { type: String, enum: ['M', 'F'] },
   dateOfBirth: { type: Date, required: true },
   
-  // ==================== المعرفات ====================
+  // ==================== Identifiers ====================
   nationalId: { type: String },
-  age: { type: Number }, // يُحسب من التاريخ
+  age: { type: Number }, // calculated from dateOfBirth
   
-  // ==================== المعلومات الطبية ====================
-  healthConditions: [{ type: String }], // الحالات الطبية
-  medications: [{ type: String }], // الأدوية
-  allergies: [{ type: String }], // الحساسيات
-  healthNotes: { type: String }, // ملاحظات عامة
+  // ==================== Medical Information (text) ====================
+  healthConditions: [{ type: String }],
+  medications: [{ type: String }],
+  allergies: [{ type: String }],
+  healthNotes: { type: String },
   emergencyContact: {
     name: String,
     phone: String,
     relationship: String
   },
   
-  // ==================== الملفات والوثائق ====================
-  files: [{
-    filename: String,
-    url: { type: String },
-    fileType: String, // 'medical_record', 'prescription', 'test', 'image', etc.
-    uploadedAt: { type: Date, default: Date.now }
-  }],
+  // ==================== Link to separate MedicalInfo document (optional) ====================
+  medicalInfoId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'MedicalInfo',
+    default: null
+  },
   
-  // ==================== الحالة ====================
+  // ==================== Status ====================
   isActive: { type: Boolean, default: true },
   status: {
     type: String,
@@ -48,7 +46,7 @@ const dependentSchema = new mongoose.Schema({
     default: 'active'
   },
   
-  // ==================== التواريخ ====================
+  // ==================== Timestamps ====================
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

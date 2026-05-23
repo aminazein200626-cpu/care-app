@@ -24,9 +24,11 @@ class _AuthorizedNotificationsScreenState extends State<AuthorizedNotificationsS
   }
 
   Future<void> _loadNotifications() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       final notifications = await _api.getNotifications();
+      if (!mounted) return;
       setState(() {
         _notifications = notifications.map((n) => {
           'id': n['_id'] ?? n['id'],
@@ -39,7 +41,15 @@ class _AuthorizedNotificationsScreenState extends State<AuthorizedNotificationsS
       });
     } catch (e) {
       print('Error loading notifications: $e');
+      if (!mounted) return;
       setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load notifications: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -51,6 +61,7 @@ class _AuthorizedNotificationsScreenState extends State<AuthorizedNotificationsS
         }
       }
       await _loadNotifications();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('All notifications marked as read'),
@@ -59,6 +70,7 @@ class _AuthorizedNotificationsScreenState extends State<AuthorizedNotificationsS
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Error: $e'),

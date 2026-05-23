@@ -7,6 +7,7 @@ import '../../core/app_theme.dart';
 import '../../core/api_config.dart';
 import 'provider_dashboard.dart';
 import 'request_details_screen.dart';
+import '../client/profile_screen.dart';
 
 class BookingRequestsScreen extends StatefulWidget {
   const BookingRequestsScreen({super.key});
@@ -43,8 +44,15 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
       if (response.statusCode == 200) {
         final List data = jsonDecode(response.body);
         if (mounted) {
+          // تأكد من أن الحالة 'pending' بصيغة صغيرة
+          final normalized = data.map((item) {
+            if (item['status'] != null && item['status'] is String) {
+              item['status'] = item['status'].toString().toLowerCase();
+            }
+            return item;
+          }).toList();
           setState(() {
-            _requests = List<Map<String, dynamic>>.from(data);
+            _requests = List<Map<String, dynamic>>.from(normalized);
             _isLoading = false;
           });
         }
@@ -56,8 +64,24 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
     }
   }
 
-
-  // ignore: unused_parameter
+  void _reportClient(String clientId, String clientName) {
+    if (clientId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Client ID not available'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(
+          targetUserId: clientId,
+          targetName: clientName,
+          targetRole: 'Client',
+        ),
+      ),
+    );
+  }
 
   List<Map<String, dynamic>> get _filteredRequests {
     return _requests.where((request) {
@@ -228,6 +252,8 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
   Widget _buildRequestCard(Map<String, dynamic> request, bool isDark) {
     final statusColor = _getStatusColor(request['status'] ?? 'pending');
     final dependent = request['dependent'];
+    final clientId = request['clientId']?.toString() ?? '';
+    final clientName = request['clientName'] ?? 'Unknown';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -252,7 +278,7 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
                         style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87),
                       ),
                       Text(
-                        "Client: ${request['clientName'] ?? 'Unknown'}",
+                        "Client: $clientName",
                         style: TextStyle(color: Colors.grey[500], fontSize: 12),
                       ),
                     ],
@@ -319,23 +345,39 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
               ),
             ],
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => RequestDetailsScreen(requestData: request),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => RequestDetailsScreen(requestData: request),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppTheme.primary),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                  );
-                },
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: AppTheme.primary),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: const Text("View Details", style: TextStyle(color: AppTheme.primary)),
+                  ),
                 ),
-                child: const Text("View Details", style: TextStyle(color: AppTheme.primary)),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _reportClient(clientId, clientName),
+                    icon: const Icon(Icons.flag_outlined, size: 18),
+                    label: const Text('Report Client'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      side: const BorderSide(color: Colors.red),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

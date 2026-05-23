@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -9,7 +10,9 @@ class AvailabilityScreen extends StatefulWidget {
   final String providerName;
   final String serviceName;
   final String dependantId;
-  final String dependantName; 
+  final String dependantName;
+  final double hourlyRate;
+
   const AvailabilityScreen({
     super.key,
     required this.providerId,
@@ -17,6 +20,7 @@ class AvailabilityScreen extends StatefulWidget {
     required this.serviceName,
     required this.dependantId,
     required this.dependantName,
+    required this.hourlyRate,
   });
 
   @override
@@ -29,7 +33,9 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
   Map<String, List<Map<String, dynamic>>> _availability = {};
   String? _selectedDate;
   Map<String, dynamic>? _selectedSlot;
-  
+  double _totalPrice = 0.0;
+  double _hours = 0.0;
+
   final TextEditingController _locationCtrl = TextEditingController();
   final TextEditingController _notesCtrl = TextEditingController();
 
@@ -42,45 +48,66 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
   Future<void> _loadAvailability() async {
     setState(() => _isLoading = true);
     try {
-      final dynamic data = await _api.getProviderAvailability(widget.providerId);
-      
-      Map<String, List<Map<String, dynamic>>> formattedSlots = {};
-      
-      if (data != null) {
-        if (data is Map<String, dynamic>) {
-          data.forEach((dateStr, slots) {
-            if (slots is List) {
-              List<Map<String, dynamic>> slotList = [];
-              for (var slot in slots) {
-                if (slot is Map) {
-                  slotList.add({
-                    'startTime': slot['startTime']?.toString() ?? '',
-                    'endTime': slot['endTime']?.toString() ?? '',
-                    'isBooked': slot['isBooked'] ?? false,
-                  });
-                }
-              }
-              if (slotList.isNotEmpty) {
-                formattedSlots[dateStr] = slotList;
-              }
-            }
-          });
-        }
+      dynamic rawData = await _api.getProviderAvailability(widget.providerId);
+      if (rawData is String) rawData = jsonDecode(rawData);
+      Map<String, dynamic> availabilityMap = {};
+      if (rawData is Map && rawData.containsKey('availability')) {
+        availabilityMap = Map<String, dynamic>.from(rawData['availability']);
+      } else if (rawData is Map<String, dynamic>) {
+        availabilityMap = rawData;
       }
-      
+      Map<String, List<Map<String, dynamic>>> formattedSlots = {};
+      availabilityMap.forEach((dateStr, slots) {
+        if (slots is List) {
+          List<Map<String, dynamic>> slotList = [];
+          for (var slot in slots) {
+            if (slot is Map && slot['isBooked'] != true) {
+              slotList.add({
+                'startTime': slot['startTime']?.toString() ?? '',
+                'endTime': slot['endTime']?.toString() ?? '',
+                'isBooked': false,
+              });
+            }
+          }
+          if (slotList.isNotEmpty) formattedSlots[dateStr] = slotList;
+        }
+      });
       setState(() {
         _availability = formattedSlots;
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading availability: $e');
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error loading availability: $e'), backgroundColor: Colors.red),
       );
     }
+  }
+
+  void _updateTotalPrice(String startTime, String endTime) {
+    try {
+      final start = _parseTime(startTime);
+      final end = _parseTime(endTime);
+      _hours = (end - start).abs();
+      _totalPrice = _hours * widget.hourlyRate;
+      setState(() {});
+    } catch (e) {
+      _hours = 0;
+      _totalPrice = 0;
+    }
+  }
+
+  double _parseTime(String time12) {
+    final parts = time12.split(' ');
+    if (parts.length != 2) return 0;
+    final time = parts[0];
+    final period = parts[1].toUpperCase();
+    final hourMin = time.split(':');
+    int hour = int.parse(hourMin[0]);
+    final minute = int.parse(hourMin[1]);
+    if (period == 'PM' && hour != 12) hour += 12;
+    if (period == 'AM' && hour == 12) hour = 0;
+    return hour + minute / 60;
   }
 
   void _goToAddTasks() {
@@ -90,7 +117,12 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
       );
       return;
     }
-    
+
+    final startDateTime = _combineDateAndTime(_selectedDate!, _selectedSlot!['startTime']);
+    final endDateTime = _combineDateAndTime(_selectedDate!, _selectedSlot!['endTime']);
+    final startTimestamp = startDateTime.millisecondsSinceEpoch;
+    final endTimestamp = endDateTime.millisecondsSinceEpoch;
+
     Navigator.pushNamed(
       context,
       '/client/add-tasks-before-booking',
@@ -102,10 +134,31 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
         'dependantName': widget.dependantName,
         'selectedDate': _selectedDate,
         'selectedSlot': _selectedSlot,
+        'startTimestamp': startTimestamp,
+        'endTimestamp': endTimestamp,
         'location': _locationCtrl.text.trim(),
         'notes': _notesCtrl.text.trim(),
       },
     );
+  }
+
+  DateTime _combineDateAndTime(String dateStr, String time12) {
+    final dateParts = dateStr.split('-');
+    final year = int.parse(dateParts[0]);
+    final month = int.parse(dateParts[1]);
+    final day = int.parse(dateParts[2]);
+
+    final timeParts = time12.split(' ');
+    final time = timeParts[0];
+    final period = timeParts[1].toUpperCase();
+    final hourMin = time.split(':');
+    int hour = int.parse(hourMin[0]);
+    final minute = int.parse(hourMin[1]);
+
+    if (period == 'PM' && hour != 12) hour += 12;
+    if (period == 'AM' && hour == 12) hour = 0;
+
+    return DateTime(year, month, day, hour, minute);
   }
 
   String _formatDate(String dateStr) {
@@ -135,21 +188,13 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
               : SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Container(
                         padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
+                        decoration: BoxDecoration(color: isDark ? const Color(0xFF1E293B) : Colors.white, borderRadius: BorderRadius.circular(16)),
                         child: Row(
                           children: [
-                            CircleAvatar(
-                              radius: 24,
-                              backgroundColor: AppTheme.primary.withOpacity(0.1),
-                              child: Icon(Icons.person, color: AppTheme.primary, size: 28),
-                            ),
+                            CircleAvatar(radius: 24, backgroundColor: AppTheme.primary.withOpacity(0.1), child: Icon(Icons.person, color: AppTheme.primary, size: 28)),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -157,6 +202,7 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
                                 children: [
                                   Text(widget.providerName, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                                   Text(widget.serviceName, style: TextStyle(color: AppTheme.primary, fontSize: 12)),
+                                  Text('${widget.hourlyRate.toInt()} DZD / hour', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                                 ],
                               ),
                             ),
@@ -191,7 +237,12 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
                                       children: slots.map((slot) {
                                         final isSlotSelected = _selectedSlot == slot;
                                         return GestureDetector(
-                                          onTap: () => setState(() => _selectedSlot = slot),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedSlot = slot;
+                                              _updateTotalPrice(slot['startTime'], slot['endTime']);
+                                            });
+                                          },
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                             decoration: BoxDecoration(
@@ -199,13 +250,7 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
                                               borderRadius: BorderRadius.circular(20),
                                               border: Border.all(color: isSlotSelected ? AppTheme.primary : Colors.grey[400]!),
                                             ),
-                                            child: Text(
-                                              '${slot['startTime']} - ${slot['endTime']}',
-                                              style: TextStyle(
-                                                color: isSlotSelected ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
-                                                fontWeight: isSlotSelected ? FontWeight.bold : FontWeight.normal,
-                                              ),
-                                            ),
+                                            child: Text('${slot['startTime']} - ${slot['endTime']}'),
                                           ),
                                         );
                                       }).toList(),
@@ -218,46 +263,28 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
                           ],
                         );
                       }).toList(),
+                      if (_selectedSlot != null) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(16), border: Border.all(color: AppTheme.primary.withOpacity(0.3))),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Duration', style: TextStyle(color: Colors.grey[500], fontSize: 12)), Text('${_hours.toStringAsFixed(1)} hours', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))]),
+                              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text('Total Price', style: TextStyle(color: Colors.grey[500], fontSize: 12)), Text('${_totalPrice.toInt()} DZD', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppTheme.primary))]),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 20),
                       Text('Location Details', style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 12),
-                      TextField(
-                        controller: _locationCtrl,
-                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-                        decoration: InputDecoration(
-                          hintText: 'Your address',
-                          prefixIcon: Icon(Icons.location_on, color: AppTheme.primary),
-                          filled: true,
-                          fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey[100],
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                        ),
-                      ),
+                      TextField(controller: _locationCtrl, style: TextStyle(color: isDark ? Colors.white : Colors.black87), decoration: InputDecoration(hintText: 'Your address', prefixIcon: Icon(Icons.location_on, color: AppTheme.primary), filled: true, fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey[100], border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none))),
                       const SizedBox(height: 16),
-                      TextField(
-                        controller: _notesCtrl,
-                        maxLines: 3,
-                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-                        decoration: InputDecoration(
-                          hintText: 'Additional notes (optional)',
-                          prefixIcon: Icon(Icons.note, color: AppTheme.primary),
-                          filled: true,
-                          fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey[100],
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                        ),
-                      ),
+                      TextField(controller: _notesCtrl, maxLines: 3, style: TextStyle(color: isDark ? Colors.white : Colors.black87), decoration: InputDecoration(hintText: 'Additional notes (optional)', prefixIcon: Icon(Icons.note, color: AppTheme.primary), filled: true, fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey[100], border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none))),
                       const SizedBox(height: 30),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 55,
-                        child: ElevatedButton(
-                          onPressed: _goToAddTasks,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                          ),
-                          child: const Text('Continue to Tasks', style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                      ),
+                      SizedBox(width: double.infinity, height: 55, child: ElevatedButton(onPressed: _goToAddTasks, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))), child: const Text('Continue to Tasks', style: TextStyle(fontWeight: FontWeight.bold)))),
                     ],
                   ),
                 ),

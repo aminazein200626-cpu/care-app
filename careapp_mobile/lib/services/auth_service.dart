@@ -54,7 +54,7 @@ class AuthService extends ChangeNotifier {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('token', _token!);
         await prefs.setString('userId', data['userId'].toString());
-        await prefs.setString('role', role);                     // Added
+        await prefs.setString('role', role);
         await prefs.setString('user', jsonEncode({
           'userId': data['userId'],
           'name': data['name'],
@@ -78,6 +78,7 @@ class AuthService extends ChangeNotifier {
     }
   }
   
+  // JSON‑based client registration (without file upload)
   Future<Map<String, dynamic>> registerClient(Map<String, dynamic> userData) async {
     _isLoading = true;
     notifyListeners();
@@ -94,6 +95,55 @@ class AuthService extends ChangeNotifier {
       
       final data = jsonDecode(response.body);
       
+      if (response.statusCode == 201) {
+        _isLoading = false;
+        notifyListeners();
+        return data;
+      } else {
+        _isLoading = false;
+        notifyListeners();
+        throw Exception(data['message'] ?? 'Registration failed');
+      }
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      rethrow;
+    }
+  }
+  
+  // ✅ NEW: Client registration with ID card image (multipart/form-data)
+  Future<Map<String, dynamic>> registerClientWithImage({
+    required Map<String, String> fields,
+    required File? nationalIdImage,
+  }) async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.register}'),
+      );
+      
+      // Add all text fields
+      fields.forEach((key, value) {
+        request.fields[key] = value;
+      });
+      // Explicitly set role
+      request.fields['role'] = 'Client';
+
+      // Attach the ID card image if provided
+      if (nationalIdImage != null) {
+        request.files.add(await http.MultipartFile.fromPath(
+          'nationalIdImage',
+          nationalIdImage.path,
+        ));
+      }
+
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+      final data = jsonDecode(responseBody);
+
       if (response.statusCode == 201) {
         _isLoading = false;
         notifyListeners();

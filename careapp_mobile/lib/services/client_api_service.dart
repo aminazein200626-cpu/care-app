@@ -5,6 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api_config.dart';
 
 class ClientApiService {
+  // ==================== دالة آمنة لتحويل أي بيانات إلى List<Map<String, dynamic>> ====================
+  List<Map<String, dynamic>> _safeList(dynamic data) {
+    if (data is List) {
+      return data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    }
+    return [];
+  }
+
   Future<String> _getToken() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
@@ -101,6 +109,14 @@ class ClientApiService {
       return jsonDecode(response.body);
     }
     throw Exception('Failed to load profile');
+  }
+
+  Future<Map<String, dynamic>> getUserProfile(String userId) async {
+    final response = await _get('/api/client/profile/$userId');
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    throw Exception('Failed to load user profile');
   }
 
   Future<Map<String, dynamic>> updateProfile(Map<String, dynamic> data) async {
@@ -206,20 +222,59 @@ class ClientApiService {
     }
   }
 
+  // ==================== CATEGORIES, SERVICES, WILAYAS ====================
+  Future<List<dynamic>> getCategories() async {
+    final response = await _get('/api/public/categories');
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    return [];
+  }
+
+  Future<List<dynamic>> getServices() async {
+    final response = await _get('/api/public/services');
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    return [];
+  }
+
+  Future<List<String>> getUniqueWilayas() async {
+    final response = await _get('/api/search/wilayas');
+    if (response.statusCode == 200) {
+      final List data = jsonDecode(response.body);
+      return data.cast<String>();
+    }
+    return [];
+  }
+
+  // ==================== SEARCH PROVIDERS ====================
   Future<List<dynamic>> searchProviders({
-    String? service,
-    String? location,
-    String? name,
+    String? wilaya,
+    String? categoryId,
+    String? serviceId,
+    double? rating,
+    double? hourlyRate,
+    String sortBy = 'rating',
+    int page = 1,
+    int limit = 20,
   }) async {
     final queryParams = <String, String>{};
-    if (service != null) queryParams['service'] = service;
-    if (location != null) queryParams['location'] = location;
-    if (name != null) queryParams['name'] = name;
-    final uri = Uri.parse('${ApiConfig.baseUrl}/api/client/providers').replace(queryParameters: queryParams);
+    if (wilaya != null && wilaya != 'All') queryParams['wilaya'] = wilaya;
+    if (categoryId != null && categoryId != 'All') queryParams['categoryId'] = categoryId;
+    if (serviceId != null && serviceId != 'All') queryParams['serviceId'] = serviceId;
+    if (rating != null) queryParams['rating'] = rating.toString();
+    if (hourlyRate != null) queryParams['hourlyRate'] = hourlyRate.toString();
+    queryParams['sortBy'] = sortBy;
+    queryParams['page'] = page.toString();
+    queryParams['limit'] = limit.toString();
+
+    final uri = Uri.parse('${ApiConfig.baseUrl}/api/search/providers').replace(queryParameters: queryParams);
     final headers = await _getHeaders();
     final response = await http.get(uri, headers: headers);
     if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+      final data = jsonDecode(response.body);
+      return data['data'] ?? [];
     }
     return [];
   }
@@ -259,54 +314,108 @@ class ClientApiService {
     }
   }
 
+  // ✅ دالة getBookingDetails مصححة بالكامل (تتعامل مع String و Map)
   Future<Map<String, dynamic>> getBookingDetails(String bookingId) async {
     final response = await _get('/api/client/bookings/$bookingId');
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
+
+      String _getString(dynamic value, {String defaultValue = ''}) {
+        if (value == null) return defaultValue;
+        if (value is String) return value;
+        if (value is Map) {
+          if (value.containsKey('_id')) return value['_id'].toString();
+          if (value.containsKey('fullName')) return value['fullName'].toString();
+          if (value.containsKey('name')) return value['name'].toString();
+          return defaultValue;
+        }
+        return value.toString();
+      }
+
+      String _getId(dynamic value) {
+        if (value == null) return '';
+        if (value is String) return value;
+        if (value is Map) return value['_id']?.toString() ?? '';
+        return value.toString();
+      }
+
+      double _getDouble(dynamic value, {double defaultValue = 0.0}) {
+        if (value == null) return defaultValue;
+        if (value is num) return value.toDouble();
+        if (value is String) return double.tryParse(value) ?? defaultValue;
+        return defaultValue;
+      }
+
+      bool _getBool(dynamic value, {bool defaultValue = false}) {
+        if (value == null) return defaultValue;
+        if (value is bool) return value;
+        if (value is String) return value.toLowerCase() == 'true';
+        return defaultValue;
+      }
+
       return {
-        'id': data['id'] ?? data['_id'],
-        'provider': data['provider'] ?? data['providerId']?['fullName'],
-        'providerPhone': data['providerPhone'] ?? data['providerId']?['phoneNumber'],
-        'providerAvatar': data['providerAvatar'] ?? data['providerId']?['profilePicture'],
-        'service': data['service'] ?? data['serviceId']?['name'],
-        'date': data['date'],
-        'time': data['time'] ?? data['startTime'],
-        'status': data['status'],
-        'location': data['location'],
-        'notes': data['notes'],
-        'totalPrice': data['totalPrice'] ?? data['price'],
-        'dependentId': data['dependentId'],
-        'paymentStatus': data['paymentStatus'],
+        'id': _getId(data['id'] ?? data['_id']),
+        'provider': _getString(data['provider'] ?? data['providerId']),
+        'providerId': _getId(data['providerId']),
+        'providerPhone': _getString(data['providerPhone'] ?? data['providerId']),
+        'providerAvatar': _getString(data['providerAvatar'] ?? data['providerId']),
+        'service': _getString(data['service'] ?? data['serviceId']),
+        'date': _getString(data['date']),
+        'time': _getString(data['time'] ?? data['startTime']),
+        'status': _getString(data['status']),
+        'location': _getString(data['location']),
+        'notes': _getString(data['notes']),
+        'totalPrice': _getDouble(data['totalPrice'] ?? data['price']),
+        'dependentId': _getId(data['dependentId']),
+        'paymentStatus': _getString(data['paymentStatus']),
+        'clientTasks': _safeList(data['clientTasks']),
+        'remainingAmount': _getDouble(data['remainingAmount']),
+        'halfPaid': _getBool(data['halfPaid']),
+        'trackingStage': _getString(data['trackingStage']),
+        'stageTimes': data['stageTimes'] is Map ? Map<String, dynamic>.from(data['stageTimes']) : {},
+        'locationLat': _getDouble(data['locationLat'], defaultValue: 36.7538),
+        'locationLng': _getDouble(data['locationLng'], defaultValue: 3.0588),
       };
     }
     throw Exception('Failed to load booking details');
   }
 
+  // ==================== TRACKING ====================
   Future<Map<String, dynamic>> getTrackingInfo(String bookingId) async {
+    print('\n========== TRACKING API CALL ==========');
+    print('Booking ID: $bookingId');
     try {
       final response = await _get('/api/client/tracking/$bookingId');
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        print('Parsed stageTimes: ${data['stageTimes']}');
+        print('Type of stageTimes: ${data['stageTimes'].runtimeType}');
         return {
           'stage': data['stage'] ?? 'Pending',
           'status': data['status'] ?? 'waiting',
-          'workSteps': data['workSteps'] ?? [],
-          'attachments': data['attachments'] ?? [],
+          'workSteps': _safeList(data['workSteps']),
+          'attachments': _safeList(data['attachments']),
           'stageTimes': data['stageTimes'] ?? {},
           'eta': data['eta'],
-          'providerLat': data['providerLat'] ?? data['locationLat'],
-          'providerLng': data['providerLng'] ?? data['locationLng'],
+          'providerLat': data['providerLat'],
+          'providerLng': data['providerLng'],
           'lastUpdate': data['lastUpdate'],
+          'clientTasks': _safeList(data['clientTasks']),
         };
       }
+      print('❌ Failed with status: ${response.statusCode}');
       throw Exception('Failed to load tracking info');
     } catch (e) {
+      print('❌ Exception in getTrackingInfo: $e');
       return {
         'stage': 'Pending',
         'status': 'waiting',
         'workSteps': [],
         'attachments': [],
         'stageTimes': {},
+        'clientTasks': [],
       };
     }
   }
@@ -382,18 +491,78 @@ class ClientApiService {
     }
   }
 
-  Future<List<dynamic>> getServiceHistory() async {
+  // ✅ دالة getServiceHistory المعدلة (تعيد بيانات موحدة وجاهزة للعرض)
+  Future<List<Map<String, dynamic>>> getServiceHistory() async {
     final response = await _get('/api/client/history');
+    print('📡 Service History Response: ${response.body}'); // للتصحيح
     if (response.statusCode == 200) {
       final List data = jsonDecode(response.body);
-      return data.map((item) {
-        return {
-          ...item,
-          'dependentName': item['dependentId'] != null ? item['dependentId']['fullName'] : null,
-        };
-      }).toList();
+      final List<Map<String, dynamic>> formatted = [];
+
+      for (var item in data) {
+        if (item is Map<String, dynamic>) {
+          // استخراج اسم الخدمة
+          String serviceName = '';
+          if (item['service'] != null && item['service'] is String) {
+            serviceName = item['service'];
+          } else if (item['serviceId'] != null && item['serviceId'] is Map) {
+            serviceName = item['serviceId']['name']?.toString() ?? '';
+          } else if (item['serviceName'] != null) {
+            serviceName = item['serviceName'].toString();
+          }
+
+          // استخراج اسم المزود
+          String providerName = '';
+          if (item['provider'] != null && item['provider'] is String) {
+            providerName = item['provider'];
+          } else if (item['providerId'] != null && item['providerId'] is Map) {
+            providerName = item['providerId']['fullName']?.toString() ?? '';
+          } else if (item['providerName'] != null) {
+            providerName = item['providerName'].toString();
+          }
+
+          // استخراج التاريخ
+          String dateStr = '';
+          if (item['date'] != null) {
+            try {
+              final date = DateTime.parse(item['date'].toString());
+              dateStr = _formatDate(date);
+            } catch (e) {
+              dateStr = item['date'].toString();
+            }
+          }
+
+          // استخراج الوقت
+          String timeStr = item['startTime']?.toString() ?? item['time']?.toString() ?? '';
+
+          // استخراج السعر
+          double price = 0.0;
+          if (item['totalPrice'] != null) {
+            price = (item['totalPrice'] as num).toDouble();
+          } else if (item['price'] != null) {
+            price = (item['price'] as num).toDouble();
+          }
+
+          formatted.add({
+            'id': item['_id']?.toString() ?? '',
+            'service': serviceName.isNotEmpty ? serviceName : 'Service',
+            'provider': providerName.isNotEmpty ? providerName : 'Provider',
+            'date': dateStr,
+            'time': timeStr,
+            'price': price,
+            'status': item['status']?.toString() ?? 'Completed',
+          });
+        }
+      }
+      return formatted;
     }
     return [];
+  }
+
+  // دالة مساعدة لتنسيق التاريخ (يمكن إزالتها إذا لم تكن موجودة)
+  String _formatDate(DateTime date) {
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}, ${date.year}';
   }
 
   Future<List<dynamic>> getAds({
@@ -423,7 +592,6 @@ class ClientApiService {
     }
   }
 
-  // ✅ الدالة المعدلة: تقبل paymentDetails
   Future<Map<String, dynamic>> payHalf(String bookingId, String paymentMethod, Map<String, dynamic> paymentDetails) async {
     final response = await _put('/api/client/bookings/$bookingId/pay-half', {
       'paymentMethod': paymentMethod,
@@ -474,8 +642,6 @@ class ClientApiService {
 
   Future<Map<String, dynamic>> createBookingRequest(Map<String, dynamic> data) async {
     final response = await _post('/api/client/booking-requests', data);
-    print('📡 createBookingRequest response status: ${response.statusCode}');
-    print('📡 createBookingRequest response body: ${response.body}');
     if (response.statusCode == 201 || response.statusCode == 200) {
       return jsonDecode(response.body);
     }
@@ -491,15 +657,6 @@ class ClientApiService {
     return [];
   }
 
-  // ==================== PROVIDER BOOKING REQUESTS ====================
-  Future<Map<String, dynamic>> getBookingRequestDetails(String requestId) async {
-    final response = await _get('/api/provider/booking-requests/$requestId');
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    }
-    throw Exception('Failed to load booking request details');
-  }
-
   Future<Map<String, dynamic>> getBookingRequestStatus(String requestId) async {
     final response = await _get('/api/client/booking-requests/$requestId/status');
     if (response.statusCode == 200) {
@@ -508,7 +665,6 @@ class ClientApiService {
     throw Exception('Failed to get request status');
   }
 
-    // ==================== PAY REMAINING AMOUNT ====================
   Future<Map<String, dynamic>> payRemaining(String bookingId) async {
     final response = await _post('/api/client/bookings/$bookingId/pay-remaining', {});
     if (response.statusCode == 200) {
@@ -516,8 +672,7 @@ class ClientApiService {
     }
     throw Exception('Failed to pay remaining amount');
   }
-
-  // ==================== RATE PROVIDER ====================
+  
   Future<Map<String, dynamic>> rateProvider(String bookingId, int rating, String comment) async {
     final response = await _post('/api/client/bookings/$bookingId/rate-provider', {
       'rating': rating,
@@ -527,5 +682,38 @@ class ClientApiService {
       return jsonDecode(response.body);
     }
     throw Exception('Failed to rate provider');
+  }
+
+  Future<Map<String, dynamic>> createBookingRequestWithFiles({
+    required Map<String, String> fields,
+    required List<File> files,
+  }) async {
+    final token = await _getToken();
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('${ApiConfig.baseUrl}/api/client/booking-requests'),
+    );
+    request.headers['Authorization'] = 'Bearer $token';
+
+    fields.forEach((key, value) {
+      request.fields[key] = value;
+    });
+
+    for (final file in files) {
+      request.files.add(await http.MultipartFile.fromPath(
+        'files',
+        file.path,
+        filename: file.path.split('/').last,
+      ));
+    }
+
+    final response = await request.send();
+    final responseBody = await response.stream.bytesToString();
+
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      return jsonDecode(responseBody);
+    }
+    final error = jsonDecode(responseBody);
+    throw Exception(error['message'] ?? 'Failed to create booking request with files');
   }
 }

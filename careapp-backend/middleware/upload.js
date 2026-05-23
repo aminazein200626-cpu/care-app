@@ -2,7 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// التأكد من وجود مجلدات التحميل
+// Ensure upload directories exist
 const uploadDir = path.join(__dirname, '../uploads');
 const profileDir = path.join(uploadDir, 'profiles');
 const documentsDir = path.join(uploadDir, 'documents');
@@ -13,7 +13,7 @@ const documentsDir = path.join(uploadDir, 'documents');
   }
 });
 
-// إعداد تخزين الملفات
+// Configure file storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     if (file.fieldname === 'profilePicture') {
@@ -29,7 +29,7 @@ const storage = multer.diskStorage({
   }
 });
 
-// ✅ فلترة محسنة - تتحقق من الامتداد فقط (أكثر تسامحاً)
+// Enhanced filter - checks only extension (more tolerant)
 const fileFilter = (req, file, cb) => {
   const allowedExtensions = /\.(jpg|jpeg|png|gif|pdf|doc|docx)$/i;
   const extname = allowedExtensions.test(path.extname(file.originalname).toLowerCase());
@@ -41,7 +41,7 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// إنشاء multer middleware
+// Create multer middleware
 const upload = multer({
   storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB

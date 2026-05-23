@@ -15,7 +15,7 @@ class Dependant {
   final String nationalId;
   final String avatar;
   final String notes;
-  final List<Map<String, dynamic>> files; // ✅ تغيير النوع
+  final List<Map<String, dynamic>> files;
 
   Dependant({
     required this.id,
@@ -29,7 +29,6 @@ class Dependant {
   });
 
   factory Dependant.fromJson(Map<String, dynamic> json) {
-    // ✅ قراءة الملفات كقائمة من الخرائط
     List<Map<String, dynamic>> fileList = [];
     if (json['files'] != null && json['files'] is List) {
       fileList = (json['files'] as List).map((item) {
@@ -244,7 +243,7 @@ class _DependantsScreenState extends State<DependantsScreen>
                             };
                             final fileList = selectedFiles.map((f) => File(f.path)).toList();
                             if (isEditing) {
-                              // يمكن إضافة تحديث المعال لاحقاً
+                              // Update logic can be added here later
                             } else {
                               await _api.addDependent(dependantData, files: fileList);
                             }
@@ -579,12 +578,11 @@ class _DependantsScreenState extends State<DependantsScreen>
               Wrap(
                 spacing: 8,
                 children: dep.files.map((fileMap) {
-                  
                   final filename = fileMap['filename'] ?? 'file';
                   return Chip(
                     label: Text(filename, style: const TextStyle(fontSize: 11)),
                     avatar: const Icon(Icons.attachment, size: 14),
-                    onDeleted: () {}, // يمكن إضافة حذف الملف لاحقاً
+                    onDeleted: () {}, // File deletion can be added later
                   );
                 }).toList(),
               ),

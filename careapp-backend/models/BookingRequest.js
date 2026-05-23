@@ -38,6 +38,12 @@ const bookingRequestSchema = new mongoose.Schema({
     enum: ['pending', 'accepted', 'rejected'],
     default: 'pending'
   },
+  // Link to Task (new)
+  taskId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Task',
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

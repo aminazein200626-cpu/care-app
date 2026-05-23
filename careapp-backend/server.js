@@ -126,6 +126,10 @@ app.use('/api', bookingRoutes);
 const notificationRoutes = require('./routes/notificationRoutes');
 app.use('/api', notificationRoutes);
 
+// ✅ إضافة مسار التقارير
+const reportRoutes = require('./routes/reportRoutes');
+app.use('/api/reports', reportRoutes);
+
 const connectDB = require('./config/db');
 connectDB();
 
@@ -188,62 +192,62 @@ io.on('connection', (socket) => {
     } catch (err) {}
   });
   
- socket.on('trackingUpdate', async (data) => {
-  const { bookingId, stage, providerLat, providerLng, workStep, attachment } = data;
-  try {
-    const booking = await Booking.findOne({ _id: bookingId, providerId: socket.userId });
-    if (!booking) return;
-    
-    if (stage && stage !== booking.trackingStage) {
-      const stageTimes = booking.stageTimes || {};
-      const now = new Date();
-      stageTimes[stage] = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      booking.stageTimes = stageTimes;
-      booking.trackingStage = stage;
-    }
-    if (providerLat && providerLng) {
-      booking.providerLat = providerLat;
-      booking.providerLng = providerLng;
-    }
-    if (workStep?.description) {
-      const workSteps = booking.workSteps || [];
-      workSteps.push({
-        description: workStep.description,
-        note: workStep.note || '',           // ✅ الملاحظة
-        fileUrl: workStep.fileUrl || null,   // ✅ رابط الملف
-        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-        timestamp: new Date().toISOString()
+  socket.on('trackingUpdate', async (data) => {
+    const { bookingId, stage, providerLat, providerLng, workStep, attachment } = data;
+    try {
+      const booking = await Booking.findOne({ _id: bookingId, providerId: socket.userId });
+      if (!booking) return;
+      
+      if (stage && stage !== booking.trackingStage) {
+        const stageTimes = booking.stageTimes || {};
+        const now = new Date();
+        stageTimes[stage] = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        booking.stageTimes = stageTimes;
+        booking.trackingStage = stage;
+      }
+      if (providerLat && providerLng) {
+        booking.providerLat = providerLat;
+        booking.providerLng = providerLng;
+      }
+      if (workStep?.description) {
+        const workSteps = booking.workSteps || [];
+        workSteps.push({
+          description: workStep.description,
+          note: workStep.note || '',
+          fileUrl: workStep.fileUrl || null,
+          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          timestamp: new Date().toISOString()
+        });
+        booking.workSteps = workSteps;
+      }
+      if (attachment?.type) {
+        const attachments = booking.attachments || [];
+        attachments.push({
+          type: attachment.type,
+          url: attachment.url || '',
+          caption: attachment.caption || '',
+          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          timestamp: new Date().toISOString()
+        });
+        booking.attachments = attachments;
+      }
+      booking.lastUpdate = new Date();
+      if (stage === 'Completed') booking.status = 'Completed';
+      await booking.save();
+      
+      io.to(`tracking_${bookingId}`).emit('trackingUpdate', {
+        bookingId,
+        stage: booking.trackingStage,
+        providerLat: booking.providerLat,
+        providerLng: booking.providerLng,
+        stageTimes: booking.stageTimes,
+        workSteps: booking.workSteps,
+        attachments: booking.attachments,
+        clientTasks: booking.clientTasks
       });
-      booking.workSteps = workSteps;
-    }
-    if (attachment?.type) {
-      const attachments = booking.attachments || [];
-      attachments.push({
-        type: attachment.type,
-        url: attachment.url || '',
-        caption: attachment.caption || '',   // ✅ الوصف
-        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-        timestamp: new Date().toISOString()
-      });
-      booking.attachments = attachments;
-    }
-    booking.lastUpdate = new Date();
-    if (stage === 'Completed') booking.status = 'Completed';
-    await booking.save();
-    
-    // ✅ إرسال البيانات الكاملة (بما فيها clientTasks)
-    io.to(`tracking_${bookingId}`).emit('trackingUpdate', {
-      bookingId,
-      stage: booking.trackingStage,
-      providerLat: booking.providerLat,
-      providerLng: booking.providerLng,
-      stageTimes: booking.stageTimes,
-      workSteps: booking.workSteps,        // الآن تحتوي على note و fileUrl
-      attachments: booking.attachments,    // الآن تحتوي على caption و url
-      clientTasks: booking.clientTasks     // ✅ أضف هذا السطر
-    });
-  } catch (err) {}
-});
+    } catch (err) {}
+  });
+  
   socket.on('disconnect', () => {
     if (socket.userId) {
       onlineUsers.delete(socket.userId);

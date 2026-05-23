@@ -1,8 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
 import '../../services/auth_service.dart';
 import '../../core/app_theme.dart';
 import '../../core/app_routes.dart';
@@ -22,7 +22,7 @@ class _RegisterClientScreenState extends State<RegisterClientScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   
-  // حقول جديدة
+  // New fields
   final _nationalIdController = TextEditingController();
   final _wilayaController = TextEditingController();
   final _postalCodeController = TextEditingController();
@@ -89,16 +89,20 @@ class _RegisterClientScreenState extends State<RegisterClientScreen> {
     try {
       final authService = Provider.of<AuthService>(context, listen: false);
 
-      await authService.registerClient({
-        'fullName': _nameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'phoneNumber': _phoneController.text.trim(),
-        'password': _passwordController.text,
-        'nationalId': _nationalIdController.text.trim(),
-        'wilaya': _wilayaController.text.trim(),
-        'postalCode': _postalCodeController.text.trim(),
-        'address': _addressController.text.trim(),
-      });
+      // Use the new method that sends multipart/form-data with image
+      await authService.registerClientWithImage(
+        fields: {
+          'fullName': _nameController.text.trim(),
+          'email': _emailController.text.trim(),
+          'phoneNumber': _phoneController.text.trim(),
+          'password': _passwordController.text,
+          'nationalId': _nationalIdController.text.trim(),
+          'wilaya': _wilayaController.text.trim(),
+          'postalCode': _postalCodeController.text.trim(),
+          'address': _addressController.text.trim(),
+        },
+        nationalIdImage: _nationalIdImage != null ? File(_nationalIdImage!.path) : null,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -197,7 +201,7 @@ class _RegisterClientScreenState extends State<RegisterClientScreen> {
                       ),
                       const SizedBox(height: 32),
                       
-                      //个人信息
+                      // Personal Information
                       Text(
                         "Personal Information",
                         style: GoogleFonts.plusJakartaSans(
@@ -247,7 +251,7 @@ class _RegisterClientScreenState extends State<RegisterClientScreen> {
                       ),
                       const SizedBox(height: 16),
                       
-                      // صورة البطاقة
+                      // ID Card Image
                       Text(
                         "National ID Card (Photo)",
                         style: GoogleFonts.plusJakartaSans(
@@ -293,7 +297,7 @@ class _RegisterClientScreenState extends State<RegisterClientScreen> {
                       ),
                       const SizedBox(height: 16),
                       
-                      // عنوان
+                      // Address Information
                       Text(
                         "Address Information",
                         style: GoogleFonts.plusJakartaSans(
@@ -333,7 +337,7 @@ class _RegisterClientScreenState extends State<RegisterClientScreen> {
                       ),
                       const SizedBox(height: 16),
                       
-                      // Password
+                      // Security
                       Text(
                         "Security",
                         style: GoogleFonts.plusJakartaSans(

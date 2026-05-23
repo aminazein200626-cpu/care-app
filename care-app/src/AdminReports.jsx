@@ -18,21 +18,7 @@ const AdminReports = ({ isDarkMode }) => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
-      
-      // ✅ التصحيح: data.reports هي المصفوفة
-      const reportsArray = data.reports || [];
-      
-      const formattedReports = reportsArray.map(report => ({
-        id: report._id,
-        sender: report.sender?.fullName || 'Unknown',
-        target: report.target?.fullName || 'Unknown',
-        reason: report.reason,
-        date: report.createdAt ? new Date(report.createdAt).toISOString().split('T')[0] : 'N/A',
-        status: report.status,
-        details: report.description || report.reason
-      }));
-      
-      setReports(formattedReports);
+      setReports(data.reports || []);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching reports:', error);
@@ -105,9 +91,9 @@ const AdminReports = ({ isDarkMode }) => {
 
   const filteredReports = reports.filter(report => {
     const matchesSearch = 
-      report.sender.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      report.target.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      report.reason.toLowerCase().includes(searchTerm.toLowerCase());
+      report.sender?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.target?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.reason?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesDate = dateFilter === "" || report.date === dateFilter;
     const matchesStatus = statusFilter === "All" || report.status === statusFilter;
@@ -121,13 +107,7 @@ const AdminReports = ({ isDarkMode }) => {
   const totalPages = Math.ceil(filteredReports.length / reportsPerPage);
 
   const paginate = (pageNumber) => setCurrentPage(pageNumber);
-  
-  // ✅ تصحيح uniqueDates
-  const uniqueDates = (() => {
-    if (!reports || reports.length === 0) return [];
-    const dates = reports.map(r => r.date).filter(d => d && d !== 'N/A');
-    return [...new Set(dates)].sort().reverse();
-  })();
+  const uniqueDates = [...new Set(reports.map(r => r.date))].sort().reverse();
 
   if (loading) {
     return <div style={{ textAlign: 'center', padding: '50px' }}>Loading reports...</div>;
@@ -231,7 +211,7 @@ const AdminReports = ({ isDarkMode }) => {
               <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Date</th>
               <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Status</th>
               <th style={{ padding: '15px 20px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase' }}>Action</th>
-            </tr>
+              </tr>
           </thead>
           <tbody>
             {currentReports.map(rep => (
@@ -325,8 +305,15 @@ const AdminReports = ({ isDarkMode }) => {
           }}>
             <h3 style={{ color: theme.accent, marginBottom: '15px', fontSize: '22px' }}>Incident Tracking</h3>
             <div style={{ backgroundColor: '#050505', padding: '20px', borderRadius: '15px', textAlign: 'left', marginBottom: '30px', border: '1px solid #1f1f1f' }}>
-              <label style={{ fontSize: '10px', color: theme.accent, display: 'block', marginBottom: '10px', letterSpacing: '1px' }}>TRACKING INFORMATION</label>
-              <p style={{ fontSize: '14px', lineHeight: '1.6', opacity: 0.8, margin: 0 }}>{selectedReport.details}</p>
+              <label style={{ fontSize: '10px', color: theme.accent, display: 'block', marginBottom: '10px', letterSpacing: '1px' }}>REPORT DETAILS</label>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Reason:</strong> {selectedReport.reason}</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Description:</strong> {selectedReport.description || 'No description provided'}</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Sender:</strong> {selectedReport.sender} ({selectedReport.senderEmail})</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Target:</strong> {selectedReport.target} ({selectedReport.targetEmail})</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Date:</strong> {selectedReport.date}</p>
+              {selectedReport.adminResponse && (
+                <p style={{ fontSize: '13px', margin: '5px 0', color: theme.accent }}><strong>Admin Response:</strong> {selectedReport.adminResponse}</p>
+              )}
             </div>
             
             {!showWarningForm ? (

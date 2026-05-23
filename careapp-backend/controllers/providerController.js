@@ -4,6 +4,10 @@ const ServiceProvider = require('../models/ServiceProvider');
 const Booking = require('../models/Booking');
 const Notification = require('../models/Notification');
 const Service = require('../models/Service');
+const File = require('../models/File');
+const Feedback = require('../models/Feedback');
+const DependentFile = require('../models/DependentFile');   // ✅ Added
+const MedicalInfo = require('../models/MedicalInfo');       // ✅ Added
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const BookingRequest = require('../models/BookingRequest');
@@ -20,6 +24,30 @@ function getTimeAgo(date) {
   return `${days}d ago`;
 }
 
+// Helper: Save file to database with clean URL path
+const saveFileToDatabase = async (filePath, originalName, mimeType, size, bookingId, taskId) => {
+  try {
+    let cleanPath = filePath.replace(/\\/g, '/');
+    if (!cleanPath.startsWith('/')) {
+      cleanPath = '/' + cleanPath;
+    }
+    const fileDoc = new File({
+      url: cleanPath,
+      name: originalName,
+      type: mimeType,
+      size: size,
+      bookingId: bookingId || null,
+      taskId: taskId || null
+    });
+    await fileDoc.save();
+    return fileDoc;
+  } catch (error) {
+    console.error('Error saving file to database:', error);
+    return null;
+  }
+};
+
+// ==================== PROVIDER REGISTRATION ====================
 exports.registerProvider = async (req, res) => {
   try {
     const { fullName, email, password, phoneNumber, wilaya, municipality, address,
@@ -66,6 +94,7 @@ exports.registerProvider = async (req, res) => {
   }
 };
 
+// ==================== PROFILE MANAGEMENT ====================
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select('-passwordHash');
@@ -111,8 +140,6 @@ exports.updateProfile = async (req, res) => {
 
 exports.updateProfessionalInfo = async (req, res) => {
   try {
-    console.log("🔍 Received body:", req.body);
-
     const { 
       bio, hourlyRate, yearsOfExp, workHours, preferredTimeSlots, 
       travelDistance, travelCost, availableWilayas,
@@ -144,14 +171,14 @@ exports.updateProfessionalInfo = async (req, res) => {
     }
     
     await provider.save();
-    console.log("✅ Provider saved successfully");
     res.json({ message: 'Professional info updated successfully', provider });
   } catch (error) {
-    console.error("❌ Update professional info error:", error);
+    console.error('Update professional info error:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
+// ==================== STATISTICS ====================
 exports.getStats = async (req, res) => {
   try {
     const providerId = req.user.userId;
@@ -163,9 +190,9 @@ exports.getStats = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$totalPrice' } } }
     ]);
     const monthlyEarnings = monthlyEarningsResult[0]?.total || 0;
-    const avgRatingResult = await Booking.aggregate([
-      { $match: { providerId: new mongoose.Types.ObjectId(providerId), rating: { $exists: true, $ne: null } } },
-      { $group: { _id: null, avg: { $avg: '$rating' } } }
+    const avgRatingResult = await Feedback.aggregate([
+      { $match: { providerId: new mongoose.Types.ObjectId(providerId) } },
+      { $group: { _id: null, avg: { $avg: '$overall_rating' } } }
     ]);
     const rating = avgRatingResult[0]?.avg.toFixed(1) || 0;
     const last7Days = [];
@@ -186,6 +213,7 @@ exports.getStats = async (req, res) => {
   }
 };
 
+// ==================== SERVICES ====================
 exports.getServices = async (req, res) => {
   try {
     const services = await Service.find({ isActive: true }).select('_id name price');
@@ -196,6 +224,7 @@ exports.getServices = async (req, res) => {
   }
 };
 
+// ==================== BOOKINGS ====================
 exports.getBookings = async (req, res) => {
   try {
     const providerId = req.user.userId;
@@ -229,27 +258,31 @@ exports.getBookingDetails = async (req, res) => {
       
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
     
-    // معلومات المعال (موجودة مسبقاً)
     let dependentInfo = null;
     if (booking.dependentId) {
+      // Fetch files from DependentFile collection
+      const files = await DependentFile.find({ dependentId: booking.dependentId._id });
+      // Fetch medical info
+      const medicalInfo = booking.dependentId.medicalInfoId 
+        ? await MedicalInfo.findById(booking.dependentId.medicalInfoId)
+        : null;
+      
       dependentInfo = {
         id: booking.dependentId._id,
         name: booking.dependentId.fullName,
         relationship: booking.dependentId.relationship,
         age: booking.dependentId.dateOfBirth ? new Date().getFullYear() - new Date(booking.dependentId.dateOfBirth).getFullYear() : 'N/A',
         healthNotes: booking.dependentId.healthNotes || 'No health notes',
-        files: booking.dependentId.files || []
+        files: files || [],
+        medicalInfo: medicalInfo || {}
       };
     }
 
-    // إحداثيات العميل (إن وُجدت في Client)
-    let clientLat = 36.7538; // افتراضي الجزائر
+    let clientLat = 36.7538;
     let clientLng = 3.0588;
     if (booking.clientId && booking.clientId.latitude && booking.clientId.longitude) {
       clientLat = booking.clientId.latitude;
       clientLng = booking.clientId.longitude;
-    } else if (booking.location) {
-      // يمكن إضافة تحويل العنوان إلى إحداثيات هنا (اختياري)
     }
 
     res.json({
@@ -264,15 +297,11 @@ exports.getBookingDetails = async (req, res) => {
       price: booking.totalPrice,
       notes: booking.notes,
       dependent: dependentInfo,
-      
-      // ✅ الحقول المطلوبة في التطبيق
-      clientTasks: booking.clientTasks || [],           // مهام العميل
-      trackingStage: booking.trackingStage || 'Pending', // المرحلة الحالية
-      stageTimes: booking.stageTimes || {},             // أوقات المراحل
-      clientLat: clientLat,                             // خط عرض العميل
-      clientLng: clientLng,                             // خط طول العميل
-      
-      // معلومات إضافية قد تكون مفيدة
+      clientTasks: booking.clientTasks || [],
+      trackingStage: booking.trackingStage || 'Pending',
+      stageTimes: booking.stageTimes || {},
+      clientLat,
+      clientLng,
       providerLat: booking.providerLat,
       providerLng: booking.providerLng,
       halfPaid: booking.halfPaid,
@@ -319,7 +348,7 @@ exports.rejectBooking = async (req, res) => {
   }
 };
 
-// ==================== AVAILABILITY FUNCTIONS ====================
+// ==================== AVAILABILITY ====================
 exports.getAvailability = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
@@ -335,11 +364,7 @@ exports.getAvailability = async (req, res) => {
     let availability = {};
     if (provider.availability) {
       if (typeof provider.availability === 'string') {
-        try {
-          availability = JSON.parse(provider.availability);
-        } catch (e) {
-          availability = {};
-        }
+        try { availability = JSON.parse(provider.availability); } catch (e) { availability = {}; }
       } else {
         availability = provider.availability;
       }
@@ -369,16 +394,10 @@ exports.addAvailability = async (req, res) => {
 
     if (!provider) {
       provider = new ServiceProvider({
-        userid: req.user.userId,
-        email: user.email,
-        fullName: user.fullName || 'Provider',
-        phoneNumber: user.phoneNumber || '',
-        wilaya: user.wilaya || '',
-        address: user.address || '',
-        hourlyRate: 1000,
-        availability: '{}',
-        status: 'active',
-        isVerified: true
+        userid: req.user.userId, email: user.email, fullName: user.fullName || 'Provider',
+        phoneNumber: user.phoneNumber || '', wilaya: user.wilaya || '',
+        address: user.address || '', hourlyRate: 1000, availability: '{}',
+        status: 'active', isVerified: true
       });
       await provider.save();
     }
@@ -386,22 +405,15 @@ exports.addAvailability = async (req, res) => {
     let availability = {};
     if (provider.availability) {
       if (typeof provider.availability === 'string') {
-        try {
-          availability = JSON.parse(provider.availability);
-        } catch (e) {
-          availability = {};
-        }
+        try { availability = JSON.parse(provider.availability); } catch (e) { availability = {}; }
       } else {
         availability = provider.availability;
       }
     }
 
     if (!availability[date]) availability[date] = [];
-
     const exists = availability[date].some(slot => slot.startTime === startTime);
-    if (exists) {
-      return res.status(400).json({ message: 'Time slot already exists' });
-    }
+    if (exists) return res.status(400).json({ message: 'Time slot already exists' });
 
     availability[date].push({ startTime, endTime, isBooked: false });
     availability[date].sort((a, b) => a.startTime.localeCompare(b.startTime));
@@ -427,19 +439,13 @@ exports.deleteAvailability = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     let provider = await ServiceProvider.findOne({ userid: req.user.userId });
-    if (!provider) {
-      provider = await ServiceProvider.findOne({ email: user.email });
-    }
+    if (!provider) provider = await ServiceProvider.findOne({ email: user.email });
     if (!provider) return res.status(404).json({ message: 'Provider not found' });
 
     let availability = {};
     if (provider.availability) {
       if (typeof provider.availability === 'string') {
-        try {
-          availability = JSON.parse(provider.availability);
-        } catch (e) {
-          availability = {};
-        }
+        try { availability = JSON.parse(provider.availability); } catch (e) { availability = {}; }
       } else {
         availability = provider.availability;
       }
@@ -458,7 +464,7 @@ exports.deleteAvailability = async (req, res) => {
   }
 };
 
-// ==================== TRACKING FUNCTIONS ====================
+// ==================== TRACKING ====================
 exports.getTrackingInfo = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -491,53 +497,76 @@ exports.updateTracking = async (req, res) => {
       stageTimes[stage] = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       booking.stageTimes = stageTimes;
       booking.trackingStage = stage;
+      
+      await Notification.create({
+        userId: booking.clientId,
+        title: 'Service Update',
+        message: `Service stage updated to: ${stage}`,
+        type: 'tracking',
+        bookingId: booking._id
+      });
     }
+    
     if (locationLat !== undefined) booking.providerLat = locationLat;
     if (locationLng !== undefined) booking.providerLng = locationLng;
+    
     if (workStep && workStep.description) {
       const workSteps = booking.workSteps || [];
       workSteps.push({ 
-        description: workStep.description, 
-        note: workStep.note || '',
+        description: workStep.description, note: workStep.note || '',
         fileUrl: workStep.fileUrl || null,
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
       });
       booking.workSteps = workSteps;
     }
+    
     if (attachment && attachment.type) {
       const attachments = booking.attachments || [];
       attachments.push({ 
-        type: attachment.type, 
-        url: attachment.url || '', 
-        caption: attachment.caption || '',
+        type: attachment.type, url: attachment.url || '', caption: attachment.caption || '',
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
       });
       booking.attachments = attachments;
     }
-    if (stage === 'Completed') booking.status = 'Completed';
+    
+    if (stage === 'Completed') {
+      booking.status = 'Completed';
+      await Notification.create({
+        userId: booking.clientId,
+        title: 'Service Completed',
+        message: `Your service has been completed. Please pay the remaining amount (${booking.remainingAmount} DZD) and rate the provider.`,
+        type: 'payment',
+        bookingId: booking._id
+      });
+      await Notification.create({
+        userId: booking.providerId,
+        title: 'Service Completed',
+        message: `You have marked the service as completed. Waiting for client to pay remaining amount and rate you.`,
+        type: 'tracking',
+        bookingId: booking._id
+      });
+    }
+    
     await booking.save();
     
     const io = req.app.get('io');
     if (io) {
       io.to(`tracking_${bookingId}`).emit('trackingUpdate', {
-        bookingId,
-        stage: booking.trackingStage,
-        providerLat: booking.providerLat,
-        providerLng: booking.providerLng,
-        stageTimes: booking.stageTimes,
-        workSteps: booking.workSteps,
-        attachments: booking.attachments,
-        clientTasks: booking.clientTasks   // ✅ أضف هذا السطر
+        bookingId, stage: booking.trackingStage,
+        providerLat: booking.providerLat, providerLng: booking.providerLng,
+        stageTimes: booking.stageTimes, workSteps: booking.workSteps,
+        attachments: booking.attachments, clientTasks: booking.clientTasks
       });
     }
     
-    res.json({ message: `Tracking updated`, stage, workSteps: booking.workSteps, attachments: booking.attachments, stageTimes: booking.stageTimes });
+    res.json({ message: `Tracking updated` });
   } catch (error) {
     console.error('Update tracking error:', error);
     res.status(500).json({ message: error.message });
   }
 };
-// ==================== ADD WORK STEP (مع ملاحظة) ====================
+
+// ==================== WORK STEPS & ATTACHMENTS ====================
 exports.addWorkStep = async (req, res) => {
   try {
     const { bookingId, description, note } = req.body;
@@ -547,11 +576,7 @@ exports.addWorkStep = async (req, res) => {
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
     const workSteps = booking.workSteps || [];
     const now = new Date();
-    workSteps.push({ 
-      description, 
-      note: note || '',   // ✅ إضافة الملاحظة
-      time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) 
-    });
+    workSteps.push({ description, note: note || '', time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) });
     booking.workSteps = workSteps;
     await booking.save();
     res.json({ message: "Work step added successfully", workStep: workSteps[workSteps.length - 1] });
@@ -561,7 +586,6 @@ exports.addWorkStep = async (req, res) => {
   }
 };
 
-// ==================== ADD ATTACHMENT (مع وصف) ====================
 exports.addAttachment = async (req, res) => {
   try {
     const { bookingId, type, fileUrl, caption } = req.body;
@@ -571,12 +595,7 @@ exports.addAttachment = async (req, res) => {
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
     const attachments = booking.attachments || [];
     const now = new Date();
-    attachments.push({ 
-      type, 
-      url: fileUrl, 
-      caption: caption || '',   // ✅ إضافة الوصف
-      time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) 
-    });
+    attachments.push({ type, url: fileUrl, caption: caption || '', time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) });
     booking.attachments = attachments;
     await booking.save();
     res.json({ message: "Attachment added successfully", attachment: attachments[attachments.length - 1] });
@@ -586,7 +605,128 @@ exports.addAttachment = async (req, res) => {
   }
 };
 
-// ==================== UPDATE LOCATION ====================
+exports.addWorkStepWithFile = async (req, res) => {
+  try {
+    const { bookingId, description, note } = req.body;
+    const providerId = req.user.userId;
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) return res.status(400).json({ message: 'Invalid booking ID' });
+    const booking = await Booking.findOne({ _id: bookingId, providerId });
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    
+    let fileUrl = null;
+    let savedFile = null;
+    if (req.file) {
+      let cleanFileName = req.file.filename.replace(/\\/g, '/');
+      fileUrl = `/uploads/worksteps/${cleanFileName}`;
+      savedFile = await saveFileToDatabase(
+        fileUrl,
+        req.file.originalname,
+        req.file.mimetype,
+        req.file.size,
+        bookingId,
+        booking.taskId || null
+      );
+    }
+    
+    const workSteps = booking.workSteps || [];
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const newStep = { 
+      description, 
+      note: note || '', 
+      time: timeStr, 
+      timestamp: now.toISOString(), 
+      fileUrl,
+      fileId: savedFile?._id || null
+    };
+    workSteps.push(newStep);
+    booking.workSteps = workSteps;
+    await booking.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`tracking_${bookingId}`).emit('newWorkStep', { 
+        bookingId, description, note: note || '', fileUrl, timestamp: now.toISOString() 
+      });
+    }
+    
+    await Notification.create({ 
+      userId: booking.clientId, 
+      title: 'Work Progress Update', 
+      message: description.length > 50 ? description.substring(0,50)+'...' : description, 
+      type: 'tracking', 
+      bookingId: booking._id 
+    });
+    
+    res.json({ message: 'Work step added', workStep: newStep, file: savedFile });
+  } catch (error) {
+    console.error('Add work step with file error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.uploadAttachment = async (req, res) => {
+  try {
+    const { bookingId, caption } = req.body;
+    const providerId = req.user.userId;
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) return res.status(400).json({ message: 'Invalid booking ID' });
+    
+    const booking = await Booking.findOne({ _id: bookingId, providerId });
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    
+    let cleanFileName = req.file.filename.replace(/\\/g, '/');
+    const fileUrl = `/uploads/attachments/${cleanFileName}`;
+    let fileType = 'file';
+    if (req.file.mimetype.startsWith('image/')) fileType = 'image';
+    else if (req.file.mimetype.startsWith('video/')) fileType = 'video';
+    else if (req.file.mimetype.startsWith('audio/')) fileType = 'audio';
+    
+    const savedFile = await saveFileToDatabase(
+      fileUrl,
+      req.file.originalname,
+      req.file.mimetype,
+      req.file.size,
+      bookingId,
+      booking.taskId || null
+    );
+    
+    const attachments = booking.attachments || [];
+    const now = new Date();
+    const newAtt = { 
+      type: fileType, 
+      url: fileUrl, 
+      caption: caption || '', 
+      time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), 
+      timestamp: now.toISOString(),
+      fileId: savedFile?._id || null
+    };
+    attachments.push(newAtt);
+    booking.attachments = attachments;
+    await booking.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`tracking_${bookingId}`).emit('newAttachment', { 
+        bookingId, type: fileType, caption: caption || '', url: fileUrl, timestamp: now.toISOString() 
+      });
+    }
+    
+    await Notification.create({ 
+      userId: booking.clientId, 
+      title: 'New Attachment', 
+      message: `Provider added a ${fileType}${caption ? ': ' + caption : ''}`, 
+      type: 'tracking', 
+      bookingId: booking._id 
+    });
+    
+    res.json({ message: 'Attachment uploaded', attachment: newAtt, file: savedFile });
+  } catch (error) {
+    console.error('Upload attachment error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.updateLocation = async (req, res) => {
   try {
     const { bookingId, lat, lng } = req.body;
@@ -594,60 +734,50 @@ exports.updateLocation = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(bookingId)) return res.status(400).json({ message: 'Invalid booking ID' });
     const booking = await Booking.findOne({ _id: bookingId, providerId });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
-    
     booking.providerLat = lat;
     booking.providerLng = lng;
+    booking.lastUpdate = new Date();
     await booking.save();
     
-    res.json({ message: 'Location updated successfully' });
+    const io = req.app.get('io');
+    if (io) io.to(`tracking_${bookingId}`).emit('locationUpdate', { lat, lng });
+    res.json({ message: 'Location updated', lat, lng });
   } catch (error) {
     console.error('Update location error:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
-// ==================== تحديث حالة مهمة العميل ====================
+// ==================== CLIENT TASKS ====================
 exports.updateClientTaskStatus = async (req, res) => {
   try {
     const { bookingId, taskIndex } = req.params;
     const { status, note } = req.body;
     const providerId = req.user.userId;
-    
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Invalid booking ID' });
-    }
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) return res.status(400).json({ message: 'Invalid booking ID' });
     
     const booking = await Booking.findOne({ _id: bookingId, providerId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
     
     const idx = parseInt(taskIndex);
-    if (isNaN(idx) || !booking.clientTasks || !booking.clientTasks[idx]) {
-      return res.status(404).json({ message: 'Task not found' });
-    }
+    if (isNaN(idx) || !booking.clientTasks || !booking.clientTasks[idx]) return res.status(404).json({ message: 'Task not found' });
     
     booking.clientTasks[idx].status = status;
     if (note) booking.clientTasks[idx].providerNote = note;
     await booking.save();
     
-    await Notification.create({
-      userId: booking.clientId,
-      title: 'Task Update',
-      message: `Provider marked "${booking.clientTasks[idx].taskName}" as ${status}`,
-      type: 'tracking',
-      bookingId: booking._id
+    await Notification.create({ 
+      userId: booking.clientId, 
+      title: 'Task Update', 
+      message: `Provider marked "${booking.clientTasks[idx].taskName}" as ${status}${note ? ': ' + note : ''}`, 
+      type: 'tracking', 
+      bookingId: booking._id 
     });
     
-    // إرسال تحديث عبر Socket.IO للعميل
     const io = req.app.get('io');
     if (io) {
-      io.to(`tracking_${bookingId}`).emit('taskUpdate', {
-        bookingId,
-        taskIndex: idx,
-        status,
-        note: note || '',
-        taskName: booking.clientTasks[idx].taskName
+      io.to(`tracking_${bookingId}`).emit('taskUpdate', { 
+        bookingId, taskIndex: idx, status, note: note || '', taskName: booking.clientTasks[idx].taskName 
       });
     }
     
@@ -658,315 +788,41 @@ exports.updateClientTaskStatus = async (req, res) => {
   }
 };
 
-exports.addWorkStepWithFile = async (req, res) => {
+exports.getClientTasks = async (req, res) => {
   try {
-    const { bookingId, description, note } = req.body;
-    const providerId = req.user.userId;
-    
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Invalid booking ID' });
-    }
-    
-    const booking = await Booking.findOne({ _id: bookingId, providerId });
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid booking ID' });
+    const booking = await Booking.findOne({ _id: id, providerId: req.user.userId });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
-    
-    let fileUrl = null;
-    if (req.file) {
-      fileUrl = `/uploads/worksteps/${req.file.filename}`;
-    }
-    
-    const workSteps = booking.workSteps || [];
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    
-    const newStep = {
-      description,
-      note: note || '',
-      time: timeStr,
-      timestamp: now.toISOString(),
-      fileUrl: fileUrl
-    };
-    
-    workSteps.push(newStep);
-    booking.workSteps = workSteps;
-    await booking.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`tracking_${bookingId}`).emit('newWorkStep', {
-        bookingId,
-        description,
-        note: note || '',
-        fileUrl: fileUrl,
-        timestamp: now.toISOString()
-      });
-    }
-    
-    await Notification.create({
-      userId: booking.clientId,
-      title: 'Work Progress Update',
-      message: description.length > 50 ? description.substring(0,50)+'...' : description,
-      type: 'tracking',
-      bookingId: booking._id
-    });
-    
-    res.json({ message: 'Work step added', workStep: newStep });
+    res.json({ halfPaid: booking.halfPaid || false, halfPaidAt: booking.halfPaidAt, halfAmount: booking.halfAmount || 0, remainingAmount: booking.remainingAmount || 0, clientTasks: booking.clientTasks || [], clientTasksSubmittedAt: booking.clientTasksSubmittedAt });
   } catch (error) {
-    console.error('Add work step error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-exports.uploadAttachment = async (req, res) => {
-  try {
-    const { bookingId, caption } = req.body;
-    const providerId = req.user.userId;
-    
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
-    
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Invalid booking ID' });
-    }
-    
-    const booking = await Booking.findOne({ _id: bookingId, providerId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    
-    const fileUrl = `/uploads/attachments/${req.file.filename}`;
-    let fileType = 'file';
-    if (req.file.mimetype.startsWith('image/')) fileType = 'image';
-    else if (req.file.mimetype.startsWith('video/')) fileType = 'video';
-    else if (req.file.mimetype.startsWith('audio/')) fileType = 'audio';
-    
-    const attachments = booking.attachments || [];
-    const now = new Date();
-    const newAtt = {
-      type: fileType,
-      url: fileUrl,
-      caption: caption || '',
-      time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      timestamp: now.toISOString()
-    };
-    attachments.push(newAtt);
-    booking.attachments = attachments;
-    await booking.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`tracking_${bookingId}`).emit('newAttachment', {
-        bookingId,
-        type: fileType,
-        caption: caption || '',
-        url: fileUrl,
-        timestamp: now.toISOString()
-      });
-    }
-    
-    await Notification.create({
-      userId: booking.clientId,
-      title: 'New Attachment',
-      message: `Provider added a ${fileType}`,
-      type: 'tracking',
-      bookingId: booking._id
-    });
-    
-    res.json({ message: 'Attachment uploaded', attachment: newAtt });
-  } catch (error) {
-    console.error('Upload attachment error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-exports.updateLocation = async (req, res) => {
-  try {
-    const { bookingId, lat, lng } = req.body;
-    const providerId = req.user.userId;
-    
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Invalid booking ID' });
-    }
-    
-    const booking = await Booking.findOne({ _id: bookingId, providerId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    
-    booking.providerLat = lat;
-    booking.providerLng = lng;
-    booking.lastUpdate = new Date();
-    await booking.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`tracking_${bookingId}`).emit('locationUpdate', { lat, lng });
-    }
-    
-    res.json({ message: 'Location updated', lat, lng });
-  } catch (error) {
-    console.error('Update location error:', error);
+    console.error('Get client tasks error:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
-// ==================== رفع مرفق (صورة/فيديو) مع وصف ====================
-exports.uploadAttachment = async (req, res) => {
-  try {
-    const { bookingId, caption } = req.body;
-    const providerId = req.user.userId;
-    
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
-    
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Invalid booking ID' });
-    }
-    
-    const booking = await Booking.findOne({ _id: bookingId, providerId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    
-    const fileUrl = `/uploads/attachments/${req.file.filename}`;
-    let fileType = 'file';
-    if (req.file.mimetype.startsWith('image/')) fileType = 'image';
-    else if (req.file.mimetype.startsWith('video/')) fileType = 'video';
-    else if (req.file.mimetype.startsWith('audio/')) fileType = 'audio';
-    
-    const attachments = booking.attachments || [];
-    const now = new Date();
-    attachments.push({
-      type: fileType,
-      url: fileUrl,
-      caption: caption || '',
-      time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      timestamp: now.toISOString()
-    });
-    booking.attachments = attachments;
-    await booking.save();
-    
-    await Notification.create({
-      userId: booking.clientId,
-      title: 'New Attachment',
-      message: `Provider added a ${fileType}`,
-      type: 'tracking',
-      bookingId: booking._id
-    });
-    
-    res.json({ message: 'Attachment uploaded', attachment: attachments[attachments.length-1] });
-  } catch (error) {
-    console.error('Upload attachment error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// ==================== تحديث الموقع الجغرافي ====================
-exports.updateLocation = async (req, res) => {
-  try {
-    const { bookingId, lat, lng } = req.body;
-    const providerId = req.user.userId;
-    
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Invalid booking ID' });
-    }
-    
-    const booking = await Booking.findOne({ _id: bookingId, providerId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-    
-    booking.providerLat = lat;
-    booking.providerLng = lng;
-    booking.lastUpdate = new Date();
-    await booking.save();
-    
-    res.json({ message: 'Location updated', lat, lng });
-  } catch (error) {
-    console.error('Update location error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// ==================== إرسال تحديث كامل للتتبع (للعميل) ====================
-exports.emitFullTrackingUpdate = async (bookingId) => {
-  try {
-    const booking = await Booking.findById(bookingId);
-    if (!booking) return;
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`tracking_${bookingId}`).emit('trackingUpdate', {
-        bookingId,
-        stage: booking.trackingStage,
-        providerLat: booking.providerLat,
-        providerLng: booking.providerLng,
-        stageTimes: booking.stageTimes,
-        workSteps: booking.workSteps,
-        attachments: booking.attachments,
-        clientTasks: booking.clientTasks,
-        status: booking.status
-      });
-    }
-  } catch (error) {
-    console.error('Error emitting tracking update:', error);
-  }
-};
-// ==================== REMAINING FUNCTIONS ====================
+// ==================== EARNINGS & PAYMENTS ====================
 exports.getEarnings = async (req, res) => {
   try {
     const providerId = req.user.userId;
     const objectIdProvider = new mongoose.Types.ObjectId(providerId);
-
-    const halfPaymentsTotal = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, halfPaid: true } },
-      { $group: { _id: null, total: { $sum: '$halfAmount' } } }
-    ]);
-    const completedTotal = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, status: 'Completed' } },
-      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-    ]);
+    const halfPaymentsTotal = await Booking.aggregate([{ $match: { providerId: objectIdProvider, halfPaid: true } }, { $group: { _id: null, total: { $sum: '$halfAmount' } } }]);
+    const completedTotal = await Booking.aggregate([{ $match: { providerId: objectIdProvider, status: 'Completed' } }, { $group: { _id: null, total: { $sum: '$totalPrice' } } }]);
     const total = (halfPaymentsTotal[0]?.total || 0) + (completedTotal[0]?.total || 0);
-
     const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0,0,0,0);
-    const halfMonthly = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, halfPaid: true, halfPaidAt: { $gte: startOfMonth } } },
-      { $group: { _id: null, total: { $sum: '$halfAmount' } } }
-    ]);
-    const completedMonthly = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, status: 'Completed', paidAt: { $gte: startOfMonth } } },
-      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-    ]);
+    const halfMonthly = await Booking.aggregate([{ $match: { providerId: objectIdProvider, halfPaid: true, halfPaidAt: { $gte: startOfMonth } } }, { $group: { _id: null, total: { $sum: '$halfAmount' } } }]);
+    const completedMonthly = await Booking.aggregate([{ $match: { providerId: objectIdProvider, status: 'Completed', paidAt: { $gte: startOfMonth } } }, { $group: { _id: null, total: { $sum: '$totalPrice' } } }]);
     const monthly = (halfMonthly[0]?.total || 0) + (completedMonthly[0]?.total || 0);
-
     const startOfWeek = new Date(); startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay()); startOfWeek.setHours(0,0,0,0);
-    const halfWeekly = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, halfPaid: true, halfPaidAt: { $gte: startOfWeek } } },
-      { $group: { _id: null, total: { $sum: '$halfAmount' } } }
-    ]);
-    const completedWeekly = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, status: 'Completed', paidAt: { $gte: startOfWeek } } },
-      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-    ]);
+    const halfWeekly = await Booking.aggregate([{ $match: { providerId: objectIdProvider, halfPaid: true, halfPaidAt: { $gte: startOfWeek } } }, { $group: { _id: null, total: { $sum: '$halfAmount' } } }]);
+    const completedWeekly = await Booking.aggregate([{ $match: { providerId: objectIdProvider, status: 'Completed', paidAt: { $gte: startOfWeek } } }, { $group: { _id: null, total: { $sum: '$totalPrice' } } }]);
     const weekly = (halfWeekly[0]?.total || 0) + (completedWeekly[0]?.total || 0);
-
     const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-    const halfToday = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, halfPaid: true, halfPaidAt: { $gte: startOfDay } } },
-      { $group: { _id: null, total: { $sum: '$halfAmount' } } }
-    ]);
-    const completedToday = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, status: 'Completed', paidAt: { $gte: startOfDay } } },
-      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-    ]);
+    const halfToday = await Booking.aggregate([{ $match: { providerId: objectIdProvider, halfPaid: true, halfPaidAt: { $gte: startOfDay } } }, { $group: { _id: null, total: { $sum: '$halfAmount' } } }]);
+    const completedToday = await Booking.aggregate([{ $match: { providerId: objectIdProvider, status: 'Completed', paidAt: { $gte: startOfDay } } }, { $group: { _id: null, total: { $sum: '$totalPrice' } } }]);
     const today = (halfToday[0]?.total || 0) + (completedToday[0]?.total || 0);
-
-    const pendingResult = await Booking.aggregate([
-      { $match: { providerId: objectIdProvider, paymentStatus: 'Pending' } },
-      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-    ]);
+    const pendingResult = await Booking.aggregate([{ $match: { providerId: objectIdProvider, paymentStatus: 'Pending' } }, { $group: { _id: null, total: { $sum: '$totalPrice' } } }]);
     const pending = pendingResult[0]?.total || 0;
-
     res.json({ total, monthly, weekly, today, pending });
   } catch (error) {
     console.error('Get earnings error:', error);
@@ -986,6 +842,24 @@ exports.getPaymentHistory = async (req, res) => {
   }
 };
 
+exports.getHalfPayments = async (req, res) => {
+  try {
+    const providerId = req.user.userId;
+    const bookings = await Booking.find({ providerId, halfPaid: true, paymentStatus: 'HalfPaid' }).populate('clientId', 'fullName phoneNumber').populate('serviceId', 'name').sort({ createdAt: -1 });
+    const halfPayments = bookings.map(booking => ({
+      id: booking._id, clientId: booking.clientId?._id, clientName: booking.clientId?.fullName,
+      clientPhone: booking.clientId?.phoneNumber, bookingId: booking._id, service: booking.serviceId?.name || booking.service,
+      amount: booking.halfAmount, date: booking.halfPaidAt ? new Date(booking.halfPaidAt).toISOString().split('T')[0] : new Date(booking.createdAt).toISOString().split('T')[0],
+      paymentMethod: booking.paymentMethod, status: booking.paymentStatus
+    }));
+    res.json(halfPayments);
+  } catch (error) {
+    console.error('Get half payments error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== WITHDRAWALS ====================
 exports.requestWithdrawal = async (req, res) => {
   try {
     const { amount, method, accountDetails } = req.body;
@@ -1008,6 +882,7 @@ exports.getWithdrawals = async (req, res) => {
   }
 };
 
+// ==================== CALL HISTORY ====================
 exports.getCallHistory = async (req, res) => {
   try {
     res.json([]);
@@ -1017,6 +892,7 @@ exports.getCallHistory = async (req, res) => {
   }
 };
 
+// ==================== USER BLOCKING ====================
 exports.blockUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1046,6 +922,7 @@ exports.getBlockedUsers = async (req, res) => {
   }
 };
 
+// ==================== ACCOUNT DELETION ====================
 exports.deleteAccount = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -1059,13 +936,14 @@ exports.deleteAccount = async (req, res) => {
   }
 };
 
+// ==================== NOTIFICATIONS ====================
 exports.createNotification = async (req, res) => {
   try {
     const { title, message, type } = req.body;
     if (!title || !message) return res.status(400).json({ message: 'Title and message are required' });
     const notification = new Notification({ userId: req.user.userId, title, message, type: type || 'system', isRead: false });
     await notification.save();
-    res.status(201).json({ message: 'Notification created successfully', notification: { id: notification._id, title: notification.title, message: notification.message, time: getTimeAgo(notification.createdAt), isRead: notification.isRead, type: notification.type } });
+    res.status(201).json({ message: 'Notification created successfully', notification: { id: notification._id, title, message, time: getTimeAgo(notification.createdAt), isRead: false, type: notification.type } });
   } catch (error) {
     console.error('Error creating notification:', error);
     res.status(500).json({ message: error.message });
@@ -1105,11 +983,27 @@ exports.deleteNotification = async (req, res) => {
   }
 };
 
+// ==================== REVIEWS (using Feedback model) ====================
 exports.getReviews = async (req, res) => {
   try {
-    const bookings = await Booking.find({ providerId: req.user.userId, rating: { $exists: true, $ne: null } }).populate('clientId', 'fullName').populate('serviceId', 'name').sort({ createdAt: -1 });
-    const reviews = bookings.map(booking => ({ id: booking._id, client: booking.clientId?.fullName, rating: booking.rating, comment: booking.feedback, date: new Date(booking.createdAt).toISOString().split('T')[0], service: booking.serviceId?.name, replied: !!booking.feedbackReply, reply: booking.feedbackReply }));
-    res.json(reviews);
+    const providerId = req.user.userId;
+    const feedbacks = await Feedback.find({ providerId })
+      .populate('clientId', 'fullName')
+      .populate('bookingId', 'service date')
+      .sort({ createdAt: -1 });
+
+    const formatted = feedbacks.map(f => ({
+      id: f._id,
+      client: f.clientId?.fullName || 'Unknown',
+      rating: f.overall_rating,
+      comment: f.comment,
+      reply: f.reply,
+      date: f.createdAt.toISOString().split('T')[0],
+      service: f.bookingId?.service || 'Service',
+      replied: !!f.reply
+    }));
+
+    res.json(formatted);
   } catch (error) {
     console.error('Get reviews error:', error);
     res.status(500).json({ message: error.message });
@@ -1120,22 +1014,83 @@ exports.replyToReview = async (req, res) => {
   try {
     const { id } = req.params;
     const { reply } = req.body;
-    if (!reply) return res.status(400).json({ message: 'Reply message is required' });
-    const booking = await Booking.findOne({ _id: id, providerId: req.user.userId });
-    if (!booking) return res.status(404).json({ message: 'Review not found' });
-    booking.feedbackReply = reply;
-    await booking.save();
-    res.json({ message: `Reply sent to review ${id}` });
+    const providerId = req.user.userId;
+
+    if (!reply) {
+      return res.status(400).json({ message: 'Reply message is required' });
+    }
+
+    const feedback = await Feedback.findById(id);
+    if (!feedback) {
+      return res.status(404).json({ message: 'Review not found' });
+    }
+
+    if (feedback.providerId.toString() !== providerId) {
+      return res.status(403).json({ message: 'Unauthorized to reply to this review' });
+    }
+
+    feedback.reply = reply;
+    feedback.replyAt = new Date();
+    await feedback.save();
+
+    if (feedback.bookingId) {
+      await Booking.findByIdAndUpdate(feedback.bookingId, { feedbackReply: reply });
+    }
+
+    await Notification.create({
+      userId: feedback.clientId,
+      title: 'Provider Replied to Your Review',
+      message: `Provider replied: ${reply}`,
+      type: 'review',
+      bookingId: feedback.bookingId
+    });
+
+    res.json({ message: 'Reply sent to review', reply });
   } catch (error) {
     console.error('Reply to review error:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
+// ==================== RATE CLIENT ====================
+exports.rateClient = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rating, comment } = req.body;
+    const providerId = req.user.userId;
+    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ message: 'Rating must be between 1 and 5' });
+    const booking = await Booking.findOne({ _id: id, providerId });
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (booking.paymentStatus !== 'Completed') return res.status(400).json({ message: 'Payment must be completed first' });
+    if (booking.clientRating) return res.status(400).json({ message: 'Already rated this client' });
+    booking.clientRating = rating;
+    booking.clientFeedback = comment || '';
+    await booking.save();
+    const allClientRatings = await Booking.find({ clientId: booking.clientId, clientRating: { $exists: true, $ne: null } });
+    const negativeClientRatings = allClientRatings.filter(b => b.clientRating <= 2).length;
+    if (negativeClientRatings >= 5) {
+      const clientUser = await User.findById(booking.clientId);
+      if (clientUser && clientUser.role === 'Client') {
+        clientUser.isActive = false;
+        await clientUser.save();
+        await Notification.create({ userId: booking.clientId, title: 'Account Suspended', message: 'Your account has been suspended due to 5 negative reviews from providers.', type: 'system' });
+        const admin = await User.findOne({ role: 'Admin' });
+        if (admin) await Notification.create({ userId: admin._id, title: 'Client Auto-Blocked', message: `${clientUser.fullName} has been blocked due to 5 negative reviews.`, type: 'system' });
+      }
+    }
+    await Notification.create({ userId: booking.clientId, title: 'You Have Been Rated', message: `${booking.provider} rated you ${rating} stars.`, type: 'review_request', bookingId: booking._id });
+    res.json({ success: true, message: 'Client rating submitted' });
+  } catch (error) {
+    console.error('Rate client error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== PROFILE PICTURE ====================
 exports.uploadProfilePicture = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-    const profilePictureUrl = `/uploads/profiles/${req.file.filename}`;
+    const profilePictureUrl = `/uploads/profiles/${req.file.filename.replace(/\\/g, '/')}`;
     await User.findByIdAndUpdate(req.user.userId, { profilePicture: profilePictureUrl });
     res.json({ message: 'Profile picture uploaded successfully', profilePicture: profilePictureUrl });
   } catch (error) {
@@ -1144,19 +1099,7 @@ exports.uploadProfilePicture = async (req, res) => {
   }
 };
 
-exports.getClientTasks = async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid booking ID' });
-    const booking = await Booking.findOne({ _id: id, providerId: req.user.userId });
-    if (!booking) return res.status(404).json({ message: 'Booking not found' });
-    res.json({ halfPaid: booking.halfPaid || false, halfPaidAt: booking.halfPaidAt, halfAmount: booking.halfAmount || 0, remainingAmount: booking.remainingAmount || 0, clientTasks: booking.clientTasks || [], clientTasksSubmittedAt: booking.clientTasksSubmittedAt });
-  } catch (error) {
-    console.error('Get client tasks error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
+// ==================== ADS ====================
 exports.getMyAds = async (req, res) => {
   try {
     res.json([]);
@@ -1187,37 +1130,7 @@ exports.pauseAd = async (req, res) => {
   }
 };
 
-exports.getHalfPayments = async (req, res) => {
-  try {
-    const providerId = req.user.userId;
-    const bookings = await Booking.find({
-      providerId,
-      halfPaid: true,
-      paymentStatus: 'HalfPaid'
-    }).populate('clientId', 'fullName phoneNumber')
-      .populate('serviceId', 'name')
-      .sort({ createdAt: -1 });
-
-    const halfPayments = bookings.map(booking => ({
-      id: booking._id,
-      clientId: booking.clientId?._id,
-      clientName: booking.clientId?.fullName,
-      clientPhone: booking.clientId?.phoneNumber,
-      bookingId: booking._id,
-      service: booking.serviceId?.name || booking.service,
-      amount: booking.halfAmount,
-      date: booking.halfPaidAt ? new Date(booking.halfPaidAt).toISOString().split('T')[0] : new Date(booking.createdAt).toISOString().split('T')[0],
-      paymentMethod: booking.paymentMethod,
-      status: booking.paymentStatus
-    }));
-
-    res.json(halfPayments);
-  } catch (error) {
-    console.error('Get half payments error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
+// ==================== COMPLAINTS ====================
 exports.fileComplaint = async (req, res) => {
   try {
     const { clientId, subject, description } = req.body;
@@ -1227,77 +1140,25 @@ exports.fileComplaint = async (req, res) => {
     console.error('File complaint error:', error);
     res.status(500).json({ message: error.message });
   }
-    
 };
-exports.rateClient = async (req, res) => {
+
+// ==================== EMIT FULL TRACKING UPDATE ====================
+exports.emitFullTrackingUpdate = async (bookingId, req) => {
   try {
-    const { id } = req.params; // bookingId
-    const { rating, comment } = req.body;
-    const providerId = req.user.userId;
-
-    if (!rating || rating < 1 || rating > 5) {
-      return res.status(400).json({ message: 'Rating must be between 1 and 5' });
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return;
+    const io = req?.app?.get('io');
+    if (io) {
+      io.to(`tracking_${bookingId}`).emit('trackingUpdate', {
+        bookingId, stage: booking.trackingStage, providerLat: booking.providerLat, providerLng: booking.providerLng,
+        stageTimes: booking.stageTimes, workSteps: booking.workSteps, attachments: booking.attachments,
+        clientTasks: booking.clientTasks, status: booking.status
+      });
     }
-
-    const booking = await Booking.findOne({ _id: id, providerId });
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
-    }
-
-    if (booking.paymentStatus !== 'Completed') {
-      return res.status(400).json({ message: 'Payment must be completed first' });
-    }
-
-    if (booking.clientRating) {
-      return res.status(400).json({ message: 'Already rated this client' });
-    }
-
-    booking.clientRating = rating;
-    booking.clientFeedback = comment || '';
-    await booking.save();
-
-    const allClientRatings = await Booking.find({
-      clientId: booking.clientId,
-      clientRating: { $exists: true, $ne: null }
-    });
-    const negativeClientRatings = allClientRatings.filter(b => b.clientRating <= 2).length;
-
-    if (negativeClientRatings >= 5) {
-      const clientUser = await User.findById(booking.clientId);
-      if (clientUser && clientUser.role === 'Client') {
-        clientUser.isActive = false;
-        await clientUser.save();
-
-        await Notification.create({
-          userId: booking.clientId,
-          title: 'Account Suspended',
-          message: 'Your account has been suspended due to 5 negative reviews from providers.',
-          type: 'system'
-        });
-
-        const admin = await User.findOne({ role: 'Admin' });
-        if (admin) {
-          await Notification.create({
-            userId: admin._id,
-            title: 'Client Auto-Blocked',
-            message: `${clientUser.fullName} has been blocked due to 5 negative reviews.`,
-            type: 'system'
-          });
-        }
-      }
-    }
-
-    await Notification.create({
-      userId: booking.clientId,
-      title: 'You Have Been Rated',
-      message: `${booking.provider} rated you ${rating} stars.`,
-      type: 'review_request',
-      bookingId: booking._id
-    });
-
-    res.json({ success: true, message: 'Client rating submitted' });
   } catch (error) {
-    console.error('Rate client error:', error);
-    res.status(500).json({ message: error.message });
+    console.error('Error emitting tracking update:', error);
   }
 };
+
+// ==================== EXPORTS ====================
+module.exports = exports;

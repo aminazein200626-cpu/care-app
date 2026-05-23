@@ -47,9 +47,11 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
   }
 
   Future<void> _loadProfile() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       final profile = await _api.getProfile();
+      if (!mounted) return;
       setState(() {
         _profile = profile;
         _nameController.text = profile['fullName'] ?? '';
@@ -59,9 +61,10 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red)
+        SnackBar(content: Text('Error loading profile: $e'), backgroundColor: Colors.red)
       );
     }
   }
@@ -69,9 +72,11 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
   Future<void> _pickImage() async {
     final picked = await _picker.pickImage(source: ImageSource.gallery);
     if (picked != null) {
+      if (!mounted) return;
       setState(() => _isUploading = true);
       try {
         final result = await _api.uploadProfilePicture(File(picked.path));
+        if (!mounted) return;
         setState(() {
           _profile['profilePicture'] = result['profilePicture'];
           _isUploading = false;
@@ -80,9 +85,10 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
           const SnackBar(content: Text('Profile picture updated!'), backgroundColor: Colors.green)
         );
       } catch (e) {
+        if (!mounted) return;
         setState(() => _isUploading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red)
+          SnackBar(content: Text('Error uploading image: $e'), backgroundColor: Colors.red)
         );
       }
     }
@@ -90,6 +96,7 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
 
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       await _api.updateProfile({
@@ -99,13 +106,15 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
         'wilaya': _wilayaController.text,
       });
       await _loadProfile();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Profile updated!'), backgroundColor: Colors.green)
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red)
+        SnackBar(content: Text('Error updating profile: $e'), backgroundColor: Colors.red)
       );
     }
   }
@@ -155,18 +164,21 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
             onPressed: () async {
               if (formKey.currentState!.validate()) {
                 Navigator.pop(ctx);
+                if (!mounted) return;
                 setState(() => _isLoading = true);
                 try {
                   await _api.changePassword(currentPasswordCtrl.text, newPasswordCtrl.text);
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Password changed successfully!'))
+                    const SnackBar(content: Text('Password changed successfully!'), backgroundColor: Colors.green)
                   );
                 } catch (e) {
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red)
                   );
                 } finally {
-                  setState(() => _isLoading = false);
+                  if (mounted) setState(() => _isLoading = false);
                 }
               }
             },
@@ -213,6 +225,9 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
   }
 
   Widget _buildProfileImage(bool isDark) {
+    final imageUrl = _profile['profilePicture'];
+    final hasImage = imageUrl != null && imageUrl.toString().isNotEmpty;
+    
     return Center(
       child: Stack(
         children: [
@@ -227,9 +242,9 @@ class _AuthorizedProfileScreenState extends State<AuthorizedProfileScreen> {
             child: ClipOval(
               child: _isUploading
                   ? const Center(child: CircularProgressIndicator())
-                  : (_profile['profilePicture'] != null && _profile['profilePicture'].isNotEmpty)
+                  : hasImage
                       ? CachedNetworkImage(
-                          imageUrl: _profile['profilePicture'],
+                          imageUrl: imageUrl,
                           width: 120,
                           height: 120,
                           fit: BoxFit.cover,

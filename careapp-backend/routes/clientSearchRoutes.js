@@ -9,7 +9,7 @@ const Dependent = require('../models/Dependent');
 // ==================== البحث عن المزودين مع التصفية ====================
 router.get('/providers', async (req, res) => {
   try {
-    const { wilaya, municipality, serviceId, rating, hourlyRate, sortBy, page = 1, limit = 20 } = req.query;
+    const { wilaya, municipality, serviceId,categoryId, rating, hourlyRate, sortBy, page = 1, limit = 20 } = req.query;
 
     let filter = {
       status: 'active',
@@ -20,6 +20,9 @@ router.get('/providers', async (req, res) => {
     if (wilaya) filter.wilaya = wilaya;
     if (municipality) filter.municipality = municipality;
 
+    if (categoryId) {
+    filter.categoryId = categoryId;
+    }
     // التصفية حسب الخدمة
     if (serviceId) {
       filter.services = serviceId;
@@ -217,6 +220,17 @@ router.get('/dependents', authMiddleware, async (req, res) => {
       success: false,
       message: error.message
     });
+  }
+});
+// ==================== الحصول على قائمة الولايات الفريدة ====================
+router.get('/wilayas', async (req, res) => {
+  try {
+    const wilayas = await ServiceProvider.distinct('wilaya', { wilaya: { $ne: null, $ne: '' } });
+    wilayas.sort();
+    res.json(wilayas);
+  } catch (error) {
+    console.error('Error fetching wilayas:', error);
+    res.status(500).json({ message: error.message });
   }
 });
 

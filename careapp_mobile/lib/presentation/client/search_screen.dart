@@ -1,19 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/app_routes.dart';
 import '../../services/client_api_service.dart';
+import '../../services/report_service.dart'; // ✅ إضافة خدمة الإبلاغ
 
 class ServiceProvider {
   final String id;
   final String name;
-  final String serviceType;
+  final String email;
+  final String phone;
+  final String serviceName;
   final String location;
   final double rating;
   final int reviewCount;
   final double pricePerHour;
+  final int yearsOfExperience;
   final String avatar;
   final String bio;
   final bool isAvailable;
@@ -22,11 +27,14 @@ class ServiceProvider {
   ServiceProvider({
     required this.id,
     required this.name,
-    required this.serviceType,
+    required this.email,
+    required this.phone,
+    required this.serviceName,
     required this.location,
     required this.rating,
     required this.reviewCount,
     required this.pricePerHour,
+    required this.yearsOfExperience,
     required this.avatar,
     required this.bio,
     required this.isAvailable,
@@ -34,48 +42,37 @@ class ServiceProvider {
   });
 
   factory ServiceProvider.fromJson(Map<String, dynamic> json) {
-    // Extract service name from possible fields
-    String serviceName = '';
-    
-    // Try to get from 'service' field
-    if (json['service'] != null && json['service'].toString().isNotEmpty) {
-      serviceName = json['service'].toString();
-    }
-    // Try from 'serviceType'
-    else if (json['serviceType'] != null && json['serviceType'].toString().isNotEmpty) {
-      serviceName = json['serviceType'].toString();
-    }
-    // Try from 'services' array (list of service objects or strings)
-    else if (json['services'] != null && json['services'] is List && json['services'].isNotEmpty) {
-      dynamic firstService = json['services'][0];
-      if (firstService is Map && firstService['name'] != null) {
-        serviceName = firstService['name'];
-      } else if (firstService is String) {
-        serviceName = firstService;
-      } else {
-        serviceName = firstService.toString();
+    String extractedServiceName = 'Care Service';
+    if (json['services'] != null && json['services'] is List && json['services'].isNotEmpty) {
+      final firstService = json['services'][0];
+      if (firstService is String && firstService.isNotEmpty) {
+        extractedServiceName = firstService;
+      } else if (firstService is Map && firstService['name'] != null) {
+        extractedServiceName = firstService['name'];
       }
+    } else if (json['serviceNames'] != null && json['serviceNames'] is List && json['serviceNames'].isNotEmpty) {
+      extractedServiceName = json['serviceNames'][0].toString();
+    } else if (json['service'] != null && json['service'].toString().isNotEmpty) {
+      extractedServiceName = json['service'].toString();
     }
-    // Try from 'serviceNames' array
-    else if (json['serviceNames'] != null && json['serviceNames'] is List && json['serviceNames'].isNotEmpty) {
-      serviceName = json['serviceNames'][0].toString();
-    }
-    // Default if nothing found
-    else {
-      serviceName = 'Care Service';
-    }
+
+    double hourlyRate = (json['hourlyRate'] ?? 0).toDouble();
+    if (hourlyRate == 0) hourlyRate = 3000;
 
     return ServiceProvider(
       id: json['_id'] ?? json['id'] ?? '',
       name: json['fullName'] ?? json['name'] ?? '',
-      serviceType: serviceName,
+      email: json['email'] ?? '',
+      phone: json['phoneNumber'] ?? '',
+      serviceName: extractedServiceName,
       location: json['wilaya'] ?? json['location'] ?? '',
-      rating: (json['averageRating'] ?? json['rating'] ?? 0).toDouble(),
-      reviewCount: json['totalReviews'] ?? json['reviewCount'] ?? 0,
-      pricePerHour: (json['hourlyRate'] ?? 0).toDouble(),
-      avatar: json['profilePicture'] ?? json['avatar'] ?? '',
+      rating: (json['averageRating'] ?? 0).toDouble(),
+      reviewCount: json['totalReviews'] ?? 0,
+      pricePerHour: hourlyRate,
+      yearsOfExperience: json['yearsOfExperience'] ?? 0,
+      avatar: json['profilePicture'] ?? '',
       bio: json['bio'] ?? '',
-      isAvailable: json['isAvailable'] ?? true,
+      isAvailable: json['status'] == 'active',
       specialties: List<String>.from(json['specialties'] ?? []),
     );
   }
@@ -92,32 +89,24 @@ class _SearchScreenState extends State<SearchScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
-  
+
   final ClientApiService _api = ClientApiService();
+  final ReportService _reportService = ReportService(); // ✅ خدمة الإبلاغ
   final TextEditingController _searchCtrl = TextEditingController();
-  
-  String _selectedType = 'All';
-  String _selectedLocation = 'All';
+
+  List<String> _wilayas = ['All'];
+  List<Map<String, dynamic>> _categories = [];
+  List<Map<String, dynamic>> _services = [];
+
+  String _selectedWilaya = 'All';
+  String _selectedCategoryId = 'All';
+  String _selectedServiceId = 'All';
+  double _maxPrice = 5000;
+  double _minRating = 0;
+
   String _searchQuery = '';
   bool _isLoading = true;
   List<ServiceProvider> _allProviders = [];
-  
-  final List<String> _serviceTypes = [
-    'All',
-    'Super Nanny',
-    'Babysitter',
-    'Pickup',
-    'Elderly Care',
-  ];
-  
-  final List<String> _locations = [
-    'All',
-    'Algiers',
-    'Oran',
-    'Constantine',
-    'Annaba',
-    'Setif',
-  ];
 
   @override
   void initState() {
@@ -128,8 +117,8 @@ class _SearchScreenState extends State<SearchScreen>
     );
     _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
-    
-    _loadProviders();
+
+    _loadInitialData();
   }
 
   @override
@@ -139,25 +128,55 @@ class _SearchScreenState extends State<SearchScreen>
     super.dispose();
   }
 
+  Future<void> _loadInitialData() async {
+    setState(() => _isLoading = true);
+    try {
+      final wilayas = await _api.getUniqueWilayas();
+      setState(() {
+        _wilayas = ['All', ...wilayas];
+      });
+
+      final categories = await _api.getCategories();
+      setState(() {
+        _categories = categories.map((c) => {
+          'id': c['_id'].toString(),
+          'name': c['name'].toString(),
+        }).toList();
+      });
+
+      final services = await _api.getServices();
+      setState(() {
+        _services = services.map((s) => ({
+          'id': s['_id'].toString(),
+          'name': s['name'].toString(),
+          'categoryId': s['categoryId']?.toString(),
+        })).toList();
+      });
+
+      await _loadProviders();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showError('Failed to load data: $e');
+    }
+  }
+
   Future<void> _loadProviders() async {
     setState(() => _isLoading = true);
-    
     try {
-      final providersData = await _api.searchProviders();
+      final providersData = await _api.searchProviders(
+        wilaya: _selectedWilaya == 'All' ? null : _selectedWilaya,
+        categoryId: _selectedCategoryId == 'All' ? null : _selectedCategoryId,
+        serviceId: _selectedServiceId == 'All' ? null : _selectedServiceId,
+        rating: _minRating > 0 ? _minRating : null,
+        hourlyRate: _maxPrice < 5000 ? _maxPrice : null,
+      );
       setState(() {
         _allProviders = providersData.map((p) => ServiceProvider.fromJson(p)).toList();
         _isLoading = false;
       });
     } catch (e) {
       setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load providers: $e'),
-            backgroundColor: AppTheme.error,
-          ),
-        );
-      }
+      _showError('Failed to load providers: $e');
     }
   }
 
@@ -165,14 +184,85 @@ class _SearchScreenState extends State<SearchScreen>
     return _allProviders.where((p) {
       final matchesSearch = _searchQuery.isEmpty ||
           p.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          p.serviceType.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          p.serviceName.toLowerCase().contains(_searchQuery.toLowerCase()) ||
           p.location.toLowerCase().contains(_searchQuery.toLowerCase());
-      
-      final matchesType = _selectedType == 'All' || p.serviceType == _selectedType;
-      final matchesLocation = _selectedLocation == 'All' || p.location == _selectedLocation;
-      
-      return matchesSearch && matchesType && matchesLocation;
+      return matchesSearch;
     }).toList();
+  }
+
+  List<Map<String, dynamic>> get _filteredServices {
+    if (_selectedCategoryId == 'All') return _services;
+    return _services.where((s) => s['categoryId'] == _selectedCategoryId).toList();
+  }
+
+  // ✅ نافذة الإبلاغ عن المزود
+  void _showReportDialog(ServiceProvider provider) {
+    final reasonCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Report ${provider.name}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: reasonCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Reason *',
+                hintText: 'e.g., Unprofessional behavior, Late arrival...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: descCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+                hintText: 'Provide more details...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (reasonCtrl.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please provide a reason'), backgroundColor: Colors.red),
+                );
+                return;
+              }
+              Navigator.pop(ctx);
+              try {
+                await _reportService.createReport(
+                  reportedId: provider.id,
+                  reason: reasonCtrl.text.trim(),
+                  description: descCtrl.text.trim(),
+                );
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Report submitted. Admin will review it.'), backgroundColor: Colors.green),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to submit report: $e'), backgroundColor: Colors.red),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Submit Report'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showProviderDetail(ServiceProvider provider) {
@@ -181,7 +271,7 @@ class _SearchScreenState extends State<SearchScreen>
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.75,
+        initialChildSize: 0.8,
         maxChildSize: 0.95,
         minChildSize: 0.5,
         builder: (_, scrollCtrl) => Container(
@@ -210,6 +300,7 @@ class _SearchScreenState extends State<SearchScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // الصورة والاسم والتقييم
                       Row(
                         children: [
                           ClipOval(
@@ -223,14 +314,16 @@ class _SearchScreenState extends State<SearchScreen>
                                       width: 72,
                                       height: 72,
                                       color: AppTheme.primaryContainer,
-                                      child: const Icon(Icons.person_rounded, color: AppTheme.primary, size: 36),
+                                      child: const Icon(Icons.person_rounded,
+                                          color: AppTheme.primary, size: 36),
                                     ),
                                   )
                                 : Container(
                                     width: 72,
                                     height: 72,
                                     color: AppTheme.primaryContainer,
-                                    child: const Icon(Icons.person_rounded, color: AppTheme.primary, size: 36),
+                                    child: const Icon(Icons.person_rounded,
+                                        color: AppTheme.primary, size: 36),
                                   ),
                           ),
                           const SizedBox(width: 16),
@@ -248,7 +341,7 @@ class _SearchScreenState extends State<SearchScreen>
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  provider.serviceType,
+                                  provider.serviceName,
                                   style: GoogleFonts.plusJakartaSans(
                                     fontSize: 14,
                                     color: AppTheme.primary,
@@ -258,10 +351,11 @@ class _SearchScreenState extends State<SearchScreen>
                                 const SizedBox(height: 4),
                                 Row(
                                   children: [
-                                    const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 16),
+                                    const Icon(Icons.star_rounded,
+                                        color: Color(0xFFF59E0B), size: 16),
                                     const SizedBox(width: 4),
                                     Text(
-                                      '${provider.rating} (${provider.reviewCount} reviews)',
+                                      '${provider.rating.toStringAsFixed(1)} (${provider.reviewCount} reviews)',
                                       style: GoogleFonts.plusJakartaSans(
                                         fontSize: 12,
                                         color: AppTheme.textSecondary,
@@ -275,16 +369,54 @@ class _SearchScreenState extends State<SearchScreen>
                         ],
                       ),
                       const SizedBox(height: 20),
+
+                      // معلومات الاتصال (هاتف - إيميل)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.surfaceVariant,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          children: [
+                            _contactRow(
+                              icon: Icons.phone_android,
+                              label: 'Phone',
+                              value: provider.phone,
+                              onTap: () => _makePhoneCall(provider.phone),
+                            ),
+                            const Divider(height: 16),
+                            _contactRow(
+                              icon: Icons.email_outlined,
+                              label: 'Email',
+                              value: provider.email,
+                              onTap: () => _sendEmail(provider.email),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // تفاصيل إضافية (ولاية، خبرة، سعر)
                       Row(
                         children: [
                           _detailChip(Icons.location_on_outlined, provider.location),
                           const SizedBox(width: 10),
-                          _detailChip(Icons.attach_money_rounded, '${provider.pricePerHour.toInt()} DZD/hr'),
+                          _detailChip(Icons.work_outline, '${provider.yearsOfExperience} years exp'),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          _detailChip(Icons.attach_money_rounded,
+                              '${provider.pricePerHour.toInt()} DZD/hr'),
                           const SizedBox(width: 10),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(
-                              color: provider.isAvailable ? AppTheme.success.withAlpha(25) : AppTheme.error.withAlpha(25),
+                              color: provider.isAvailable
+                                  ? AppTheme.success.withAlpha(25)
+                                  : AppTheme.error.withAlpha(25),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Text(
@@ -292,22 +424,35 @@ class _SearchScreenState extends State<SearchScreen>
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
-                                color: provider.isAvailable ? AppTheme.success : AppTheme.error,
+                                color: provider.isAvailable
+                                    ? AppTheme.success
+                                    : AppTheme.error,
                               ),
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 20),
-                      Text('About', style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+
+                      // السيرة الذاتية
+                      Text('About',
+                          style: GoogleFonts.plusJakartaSans(
+                              fontSize: 16, fontWeight: FontWeight.w700)),
                       const SizedBox(height: 8),
                       Text(
-                        provider.bio.isNotEmpty ? provider.bio : 'Professional healthcare provider dedicated to quality care.',
-                        style: GoogleFonts.plusJakartaSans(fontSize: 14, color: AppTheme.textSecondary, height: 1.6),
+                        provider.bio.isNotEmpty
+                            ? provider.bio
+                            : 'Professional healthcare provider dedicated to quality care.',
+                        style: GoogleFonts.plusJakartaSans(
+                            fontSize: 14, color: AppTheme.textSecondary, height: 1.6),
                       ),
                       const SizedBox(height: 20),
+
+                      // التخصصات
                       if (provider.specialties.isNotEmpty) ...[
-                        Text('Specialties', style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+                        Text('Specialties',
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 16, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 10),
                         Wrap(
                           spacing: 8,
@@ -318,11 +463,17 @@ class _SearchScreenState extends State<SearchScreen>
                               color: AppTheme.primaryContainer.withAlpha(80),
                               borderRadius: BorderRadius.circular(20),
                             ),
-                            child: Text(s, style: GoogleFonts.plusJakartaSans(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary)),
+                            child: Text(s,
+                                style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.primary)),
                           )).toList(),
                         ),
+                        const SizedBox(height: 20),
                       ],
-                      const SizedBox(height: 28),
+
+                      // زر الحجز
                       SizedBox(
                         width: double.infinity,
                         height: 50,
@@ -336,7 +487,8 @@ class _SearchScreenState extends State<SearchScreen>
                                     arguments: {
                                       'providerId': provider.id,
                                       'providerName': provider.name,
-                                      'serviceName': provider.serviceType,
+                                      'serviceName': provider.serviceName,
+                                      'hourlyRate': provider.pricePerHour,
                                     },
                                   );
                                 }
@@ -344,9 +496,26 @@ class _SearchScreenState extends State<SearchScreen>
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppTheme.primary,
                             foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
                           ),
-                          child: Text('Book Now', style: GoogleFonts.plusJakartaSans(fontSize: 15, fontWeight: FontWeight.w700)),
+                          child: Text('Book Now',
+                              style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 15, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // ✅ زر الإبلاغ عن المزود
+                      OutlinedButton.icon(
+                        onPressed: () => _showReportDialog(provider),
+                        icon: const Icon(Icons.flag_outlined, size: 18),
+                        label: const Text('Report Provider'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red,
+                          side: const BorderSide(color: Colors.red),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
                         ),
                       ),
                     ],
@@ -358,6 +527,60 @@ class _SearchScreenState extends State<SearchScreen>
         ),
       ),
     );
+  }
+
+  Widget _contactRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: value.isNotEmpty ? onTap : null,
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: AppTheme.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11, color: AppTheme.textMuted)),
+                Text(value.isNotEmpty ? value : 'Not provided',
+                    style: GoogleFonts.plusJakartaSans(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: value.isNotEmpty
+                            ? AppTheme.textPrimary
+                            : AppTheme.textMuted)),
+              ],
+            ),
+          ),
+          if (value.isNotEmpty)
+            Icon(Icons.open_in_new, size: 16, color: AppTheme.primary),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _makePhoneCall(String phone) async {
+    final Uri telUri = Uri(scheme: 'tel', path: phone);
+    if (await canLaunchUrl(telUri)) {
+      await launchUrl(telUri);
+    } else {
+      _showError('Cannot make call to $phone');
+    }
+  }
+
+  Future<void> _sendEmail(String email) async {
+    final Uri emailUri = Uri(scheme: 'mailto', path: email);
+    if (await canLaunchUrl(emailUri)) {
+      await launchUrl(emailUri);
+    } else {
+      _showError('Cannot send email to $email');
+    }
   }
 
   Widget _detailChip(IconData icon, String label) {
@@ -372,9 +595,19 @@ class _SearchScreenState extends State<SearchScreen>
         children: [
           Icon(icon, size: 13, color: AppTheme.textSecondary),
           const SizedBox(width: 4),
-          Text(label, style: GoogleFonts.plusJakartaSans(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
+          Text(label,
+              style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w500)),
         ],
       ),
+    );
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.red),
     );
   }
 
@@ -398,14 +631,18 @@ class _SearchScreenState extends State<SearchScreen>
                           TextField(
                             controller: _searchCtrl,
                             onChanged: (v) => setState(() => _searchQuery = v),
-                            style: GoogleFonts.plusJakartaSans(fontSize: 14, color: AppTheme.textPrimary),
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 14, color: AppTheme.textPrimary),
                             decoration: InputDecoration(
                               hintText: 'Search providers...',
-                              hintStyle: GoogleFonts.plusJakartaSans(fontSize: 14, color: AppTheme.textMuted),
-                              prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textMuted, size: 22),
+                              hintStyle: GoogleFonts.plusJakartaSans(
+                                  fontSize: 14, color: AppTheme.textMuted),
+                              prefixIcon: const Icon(Icons.search_rounded,
+                                  color: AppTheme.textMuted, size: 22),
                               suffixIcon: _searchQuery.isNotEmpty
                                   ? IconButton(
-                                      icon: const Icon(Icons.clear_rounded, color: AppTheme.textMuted, size: 20),
+                                      icon: const Icon(Icons.clear_rounded,
+                                          color: AppTheme.textMuted, size: 20),
                                       onPressed: () {
                                         _searchCtrl.clear();
                                         setState(() => _searchQuery = '');
@@ -414,36 +651,63 @@ class _SearchScreenState extends State<SearchScreen>
                                   : null,
                               filled: true,
                               fillColor: Colors.white,
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppTheme.divider)),
-                              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppTheme.divider)),
-                              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppTheme.primary, width: 2)),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                  borderSide:
+                                      const BorderSide(color: AppTheme.divider)),
+                              enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                  borderSide:
+                                      const BorderSide(color: AppTheme.divider)),
+                              focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                  borderSide: const BorderSide(
+                                      color: AppTheme.primary, width: 2)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 14),
                             ),
                           ),
                           const SizedBox(height: 16),
-                          Text('Service Type', style: GoogleFonts.plusJakartaSans(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                          Text('Wilaya',
+                              style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textPrimary)),
                           const SizedBox(height: 8),
                           SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             child: Row(
-                              children: _serviceTypes.map((t) {
-                                final isSelected = _selectedType == t;
+                              children: _wilayas.map((w) {
+                                final isSelected = _selectedWilaya == w;
                                 return GestureDetector(
-                                  onTap: () => setState(() => _selectedType = t),
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedWilaya = w;
+                                      _loadProviders();
+                                    });
+                                  },
                                   child: Container(
                                     margin: const EdgeInsets.only(right: 8),
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 7),
                                     decoration: BoxDecoration(
-                                      color: isSelected ? AppTheme.primary : Colors.white,
+                                      color: isSelected
+                                          ? AppTheme.primary
+                                          : Colors.white,
                                       borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(color: isSelected ? AppTheme.primary : AppTheme.divider),
+                                      border: Border.all(
+                                          color: isSelected
+                                              ? AppTheme.primary
+                                              : AppTheme.divider),
                                     ),
                                     child: Text(
-                                      t,
+                                      w,
                                       style: GoogleFonts.plusJakartaSans(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w600,
-                                        color: isSelected ? Colors.white : AppTheme.textSecondary,
+                                        color: isSelected
+                                            ? Colors.white
+                                            : AppTheme.textSecondary,
                                       ),
                                     ),
                                   ),
@@ -452,42 +716,234 @@ class _SearchScreenState extends State<SearchScreen>
                             ),
                           ),
                           const SizedBox(height: 16),
-                          Text('Location', style: GoogleFonts.plusJakartaSans(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                          Text('Category',
+                              style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textPrimary)),
                           const SizedBox(height: 8),
                           SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             child: Row(
-                              children: _locations.map((l) {
-                                final isSelected = _selectedLocation == l;
-                                return GestureDetector(
-                                  onTap: () => setState(() => _selectedLocation = l),
+                              children: [
+                                GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedCategoryId = 'All';
+                                      _selectedServiceId = 'All';
+                                      _loadProviders();
+                                    });
+                                  },
                                   child: Container(
                                     margin: const EdgeInsets.only(right: 8),
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 7),
                                     decoration: BoxDecoration(
-                                      color: isSelected ? AppTheme.primaryContainer.withAlpha(150) : Colors.white,
+                                      color: _selectedCategoryId == 'All'
+                                          ? AppTheme.primary
+                                          : Colors.white,
                                       borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(color: isSelected ? AppTheme.primary : AppTheme.divider),
+                                      border: Border.all(
+                                          color: _selectedCategoryId == 'All'
+                                              ? AppTheme.primary
+                                              : AppTheme.divider),
                                     ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (l != 'All') ...[
-                                          Icon(Icons.location_on_outlined, size: 12, color: isSelected ? AppTheme.primary : AppTheme.textMuted),
-                                          const SizedBox(width: 4),
-                                        ],
-                                        Text(l, style: GoogleFonts.plusJakartaSans(fontSize: 12, fontWeight: FontWeight.w600, color: isSelected ? AppTheme.primary : AppTheme.textSecondary)),
-                                      ],
-                                    ),
+                                    child: Text('All',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: _selectedCategoryId == 'All'
+                                              ? Colors.white
+                                              : AppTheme.textSecondary,
+                                        )),
                                   ),
-                                );
-                              }).toList(),
+                                ),
+                                ..._categories.map((c) {
+                                  final isSelected =
+                                      _selectedCategoryId == c['id'];
+                                  return GestureDetector(
+                                    onTap: () {
+                                      setState(() {
+                                        _selectedCategoryId = c['id'];
+                                        _selectedServiceId = 'All';
+                                        _loadProviders();
+                                      });
+                                    },
+                                    child: Container(
+                                      margin: const EdgeInsets.only(right: 8),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 7),
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? AppTheme.primary
+                                            : Colors.white,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                            color: isSelected
+                                                ? AppTheme.primary
+                                                : AppTheme.divider),
+                                      ),
+                                      child: Text(c['name'],
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: isSelected
+                                                ? Colors.white
+                                                : AppTheme.textSecondary,
+                                          )),
+                                    ),
+                                  );
+                                }),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 16),
+                          if (_selectedCategoryId != 'All') ...[
+                            Text('Service',
+                                style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.textPrimary)),
+                            const SizedBox(height: 8),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  GestureDetector(
+                                    onTap: () {
+                                      setState(() {
+                                        _selectedServiceId = 'All';
+                                        _loadProviders();
+                                      });
+                                    },
+                                    child: Container(
+                                      margin: const EdgeInsets.only(right: 8),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 7),
+                                      decoration: BoxDecoration(
+                                        color: _selectedServiceId == 'All'
+                                            ? AppTheme.primary
+                                            : Colors.white,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                            color: _selectedServiceId == 'All'
+                                                ? AppTheme.primary
+                                                : AppTheme.divider),
+                                      ),
+                                      child: Text('All',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: _selectedServiceId == 'All'
+                                                ? Colors.white
+                                                : AppTheme.textSecondary,
+                                          )),
+                                    ),
+                                  ),
+                                  ..._filteredServices.map((s) {
+                                    final isSelected =
+                                        _selectedServiceId == s['id'];
+                                    return GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedServiceId = s['id'];
+                                          _loadProviders();
+                                        });
+                                      },
+                                      child: Container(
+                                        margin: const EdgeInsets.only(right: 8),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 14, vertical: 7),
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? AppTheme.primary
+                                              : Colors.white,
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                          border: Border.all(
+                                              color: isSelected
+                                                  ? AppTheme.primary
+                                                  : AppTheme.divider),
+                                        ),
+                                        child: Text(s['name'],
+                                            style: GoogleFonts.plusJakartaSans(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: isSelected
+                                                  ? Colors.white
+                                                  : AppTheme.textSecondary,
+                                            )),
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Max Price (DZD)',
+                                        style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppTheme.textMuted)),
+                                    Slider(
+                                      value: _maxPrice,
+                                      min: 500,
+                                      max: 5000,
+                                      divisions: 9,
+                                      label: '${_maxPrice.toInt()} DZD',
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _maxPrice = val;
+                                          _loadProviders();
+                                        });
+                                      },
+                                      activeColor: AppTheme.primary,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Min Rating',
+                                        style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppTheme.textMuted)),
+                                    Slider(
+                                      value: _minRating,
+                                      min: 0,
+                                      max: 5,
+                                      divisions: 5,
+                                      label: '${_minRating.toStringAsFixed(1)} ★',
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _minRating = val;
+                                          _loadProviders();
+                                        });
+                                      },
+                                      activeColor: AppTheme.primary,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
                           Text(
                             '${_filteredProviders.length} provider${_filteredProviders.length != 1 ? 's' : ''} found',
-                            style: GoogleFonts.plusJakartaSans(fontSize: 13, color: AppTheme.textMuted, fontWeight: FontWeight.w500),
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 13,
+                                color: AppTheme.textMuted,
+                                fontWeight: FontWeight.w500),
                           ),
                           const SizedBox(height: 12),
                         ],
@@ -560,7 +1016,12 @@ class _SearchScreenState extends State<SearchScreen>
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: [BoxShadow(color: Colors.black.withAlpha(10), blurRadius: 12, offset: const Offset(0, 4))],
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withAlpha(10),
+                blurRadius: 12,
+                offset: const Offset(0, 4))
+          ],
         ),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -579,14 +1040,16 @@ class _SearchScreenState extends State<SearchScreen>
                               width: 60,
                               height: 60,
                               color: AppTheme.primaryContainer,
-                              child: const Icon(Icons.person_rounded, color: AppTheme.primary, size: 30),
+                              child: const Icon(Icons.person_rounded,
+                                  color: AppTheme.primary, size: 30),
                             ),
                           )
                         : Container(
                             width: 60,
                             height: 60,
                             color: AppTheme.primaryContainer,
-                            child: const Icon(Icons.person_rounded, color: AppTheme.primary, size: 30),
+                            child: const Icon(Icons.person_rounded,
+                                color: AppTheme.primary, size: 30),
                           ),
                   ),
                   Positioned(
@@ -596,7 +1059,9 @@ class _SearchScreenState extends State<SearchScreen>
                       width: 16,
                       height: 16,
                       decoration: BoxDecoration(
-                        color: provider.isAvailable ? AppTheme.success : AppTheme.textMuted,
+                        color: provider.isAvailable
+                            ? AppTheme.success
+                            : AppTheme.textMuted,
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2),
                       ),
@@ -609,21 +1074,39 @@ class _SearchScreenState extends State<SearchScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(provider.name, style: GoogleFonts.plusJakartaSans(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+                    Text(provider.name,
+                        style: GoogleFonts.plusJakartaSans(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary)),
                     const SizedBox(height: 3),
-                    Text(provider.serviceType, style: GoogleFonts.plusJakartaSans(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                    Text(provider.serviceName,
+                        style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            color: AppTheme.primary,
+                            fontWeight: FontWeight.w600)),
                     const SizedBox(height: 6),
                     Row(
                       children: [
-                        const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 14),
+                        const Icon(Icons.star_rounded,
+                            color: Color(0xFFF59E0B), size: 14),
                         const SizedBox(width: 3),
-                        Text('${provider.rating}', style: GoogleFonts.plusJakartaSans(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                        Text('${provider.rating.toStringAsFixed(1)}',
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textPrimary)),
                         const SizedBox(width: 4),
-                        Text('(${provider.reviewCount})', style: GoogleFonts.plusJakartaSans(fontSize: 11, color: AppTheme.textMuted)),
+                        Text('(${provider.reviewCount})',
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11, color: AppTheme.textMuted)),
                         const SizedBox(width: 8),
-                        const Icon(Icons.location_on_outlined, size: 12, color: AppTheme.textMuted),
+                        const Icon(Icons.location_on_outlined,
+                            size: 12, color: AppTheme.textMuted),
                         const SizedBox(width: 2),
-                        Text(provider.location, style: GoogleFonts.plusJakartaSans(fontSize: 11, color: AppTheme.textMuted)),
+                        Text(provider.location,
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11, color: AppTheme.textMuted)),
                       ],
                     ),
                   ],
@@ -632,10 +1115,17 @@ class _SearchScreenState extends State<SearchScreen>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('${provider.pricePerHour.toInt()}', style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.w800, color: AppTheme.primary)),
-                  Text('DZD/hr', style: GoogleFonts.plusJakartaSans(fontSize: 11, color: AppTheme.textMuted)),
+                  Text('${provider.pricePerHour.toInt()}',
+                      style: GoogleFonts.plusJakartaSans(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.primary)),
+                  Text('DZD/hr',
+                      style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11, color: AppTheme.textMuted)),
                   const SizedBox(height: 8),
-                  const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted, size: 20),
+                  const Icon(Icons.chevron_right_rounded,
+                      color: AppTheme.textMuted, size: 20),
                 ],
               ),
             ],
@@ -653,13 +1143,23 @@ class _SearchScreenState extends State<SearchScreen>
           Container(
             width: 80,
             height: 80,
-            decoration: BoxDecoration(color: AppTheme.primaryContainer.withAlpha(80), shape: BoxShape.circle),
-            child: const Icon(Icons.search_off_rounded, color: AppTheme.primary, size: 40),
+            decoration: BoxDecoration(
+                color: AppTheme.primaryContainer.withAlpha(80),
+                shape: BoxShape.circle),
+            child: const Icon(Icons.search_off_rounded,
+                color: AppTheme.primary, size: 40),
           ),
           const SizedBox(height: 16),
-          Text('No Providers Found', style: GoogleFonts.plusJakartaSans(fontSize: 18, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+          Text('No Providers Found',
+              style: GoogleFonts.plusJakartaSans(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary)),
           const SizedBox(height: 8),
-          Text('Try adjusting your search\nor filter criteria.', textAlign: TextAlign.center, style: GoogleFonts.plusJakartaSans(fontSize: 14, color: AppTheme.textSecondary)),
+          Text('Try adjusting your search\nor filter criteria.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.plusJakartaSans(
+                  fontSize: 14, color: AppTheme.textSecondary)),
         ],
       ),
     );

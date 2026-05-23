@@ -1,15 +1,28 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/app_routes.dart';
 import '../../services/auth_service.dart';
 import '../../services/client_api_service.dart';
+import '../../services/report_service.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  final String? targetUserId;
+  final String? targetName;
+  final String? targetRole;
+
+  const ProfileScreen({
+    super.key,
+    this.targetUserId,
+    this.targetName,
+    this.targetRole,
+  });
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -21,8 +34,11 @@ class _ProfileScreenState extends State<ProfileScreen>
   late Animation<double> _fadeAnim;
   
   final ClientApiService _api = ClientApiService();
+  final ReportService _reportService = ReportService();
+  final ImagePicker _picker = ImagePicker();
   
   bool _isLoading = true;
+  bool _isUploading = false;
   bool _notificationsEnabled = true;
   bool _emailAlertsEnabled = false;
   
@@ -60,7 +76,9 @@ class _ProfileScreenState extends State<ProfileScreen>
     setState(() => _isLoading = true);
     
     try {
-      final profile = await _api.getProfile();
+      final profile = widget.targetUserId != null
+          ? await _api.getUserProfile(widget.targetUserId!)
+          : await _api.getProfile();
       
       setState(() {
         _userInfo = {
@@ -76,14 +94,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       });
     } catch (e) {
       setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load profile: $e'),
-            backgroundColor: AppTheme.error,
-          ),
-        );
-      }
+      _showError('Failed to load profile: $e');
     }
   }
 
@@ -99,7 +110,175 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  // ✅ طلب الأذونات
+  Future<bool> _requestGalleryPermission() async {
+    final status = await Permission.photos.request();
+    if (status.isGranted) {
+      return true;
+    } else if (status.isDenied) {
+      _showError('Gallery permission denied. Please enable it in settings.');
+      return false;
+    } else if (status.isPermanentlyDenied) {
+      _showError('Gallery permission permanently denied. Please enable it in app settings.');
+      openAppSettings();
+      return false;
+    }
+    return false;
+  }
+
+  Future<bool> _requestCameraPermission() async {
+    final status = await Permission.camera.request();
+    if (status.isGranted) {
+      return true;
+    } else if (status.isDenied) {
+      _showError('Camera permission denied. Please enable it in settings.');
+      return false;
+    } else if (status.isPermanentlyDenied) {
+      _showError('Camera permission permanently denied. Please enable it in app settings.');
+      openAppSettings();
+      return false;
+    }
+    return false;
+  }
+
+  Future<void> _updateProfileImage() async {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: AppTheme.primary),
+              title: const Text('Take a photo'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final hasPermission = await _requestCameraPermission();
+                if (hasPermission) {
+                  await _pickImage(ImageSource.camera);
+                }
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: AppTheme.primary),
+              title: const Text('Choose from gallery'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final hasPermission = await _requestGalleryPermission();
+                if (hasPermission) {
+                  await _pickImage(ImageSource.gallery);
+                }
+              },
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final pickedFile = await _picker.pickImage(
+      source: source,
+      imageQuality: 80,
+    );
+    if (pickedFile == null) return;
+
+    setState(() => _isUploading = true);
+
+    try {
+      final result = await _api.updateProfilePicture(File(pickedFile.path));
+      setState(() {
+        _profileImage = result['profilePicture'];
+        _isUploading = false;
+      });
+      _showSuccess('Profile picture updated!');
+    } catch (e) {
+      setState(() => _isUploading = false);
+      _showError('Failed to upload image: $e');
+    }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.red),
+    );
+  }
+
+  void _showSuccess(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.green),
+    );
+  }
+
+  void _showReportDialog() {
+    if (widget.targetUserId == null) return;
+
+    final reasonCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    final targetName = widget.targetName ?? _userInfo['name'] ?? 'this user';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Report $targetName'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: reasonCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Reason *',
+                hintText: 'e.g., Unprofessional behavior...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: descCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (reasonCtrl.text.trim().isEmpty) {
+                _showError('Please provide a reason');
+                return;
+              }
+              Navigator.pop(ctx);
+              try {
+                await _reportService.createReport(
+                  reportedId: widget.targetUserId!,
+                  reason: reasonCtrl.text.trim(),
+                  description: descCtrl.text.trim(),
+                );
+                _showSuccess('Report submitted. Admin will review it.');
+              } catch (e) {
+                _showError('Failed to submit report: $e');
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Submit Report'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showEditProfile() {
+    if (widget.targetUserId != null) return;
+
     final nameCtrl = TextEditingController(text: _userInfo['name']);
     final emailCtrl = TextEditingController(text: _userInfo['email']);
     final phoneCtrl = TextEditingController(text: _userInfo['phone']);
@@ -122,23 +301,12 @@ class _ProfileScreenState extends State<ProfileScreen>
             key: formKey,
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Text(
-                      'Edit Profile',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
+                    Text('Edit Profile', style: GoogleFonts.plusJakartaSans(fontSize: 18, fontWeight: FontWeight.w700)),
                     const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
+                    IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
                   ],
                 ),
                 const SizedBox(height: 20),
@@ -156,10 +324,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                   child: ElevatedButton(
                     onPressed: () async {
                       if (!formKey.currentState!.validate()) return;
-                      
                       Navigator.pop(ctx);
                       setState(() => _isLoading = true);
-                      
                       try {
                         await _api.updateProfile({
                           'fullName': nameCtrl.text,
@@ -168,32 +334,16 @@ class _ProfileScreenState extends State<ProfileScreen>
                           'address': addressCtrl.text,
                         });
                         await _loadProfile();
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Profile updated!'), backgroundColor: AppTheme.success),
-                          );
-                        }
+                        _showSuccess('Profile updated!');
                       } catch (e) {
                         setState(() => _isLoading = false);
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Failed to update profile'), backgroundColor: AppTheme.error),
-                          );
-                        }
+                        _showError('Failed to update profile');
                       }
                     },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                    child: Text(
-                      'Save Changes',
-                      style: GoogleFonts.plusJakartaSans(fontSize: 15, fontWeight: FontWeight.w700),
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+                    child: const Text('Save Changes', style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
                 ),
-                const SizedBox(height: 8),
               ],
             ),
           ),
@@ -203,36 +353,27 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   void _confirmLogout() {
+    if (widget.targetUserId != null) return;
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Sign Out', style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700)),
-        content: Text('Are you sure you want to sign out?', style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary)),
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out?'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(ctx);
               final authService = Provider.of<AuthService>(context, listen: false);
               await authService.logout();
               if (mounted) {
-                Navigator.pushNamedAndRemoveUntil(
-                  context,
-                  AppRoutes.login,
-                  (route) => false,
-                );
+                Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (route) => false);
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.error,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            child: Text('Sign Out', style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+            child: const Text('Sign Out'),
           ),
         ],
       ),
@@ -248,8 +389,29 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
     }
 
+    final String title = widget.targetUserId != null
+        ? (widget.targetRole == 'Provider' ? 'Provider Profile' : 'Client Profile')
+        : 'My Profile';
+
     return Scaffold(
       backgroundColor: AppTheme.background,
+      appBar: AppBar(
+        title: Text(title),
+        backgroundColor: AppTheme.primary,
+        foregroundColor: Colors.white,
+        actions: [
+          if (widget.targetUserId != null)
+            IconButton(
+              icon: const Icon(Icons.flag_outlined),
+              onPressed: _showReportDialog,
+            ),
+          if (widget.targetUserId == null)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: _showEditProfile,
+            ),
+        ],
+      ),
       body: FadeTransition(
         opacity: _fadeAnim,
         child: CustomScrollView(
@@ -259,7 +421,6 @@ class _ProfileScreenState extends State<ProfileScreen>
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildSection('Personal Information', [
                       _buildInfoRow(Icons.person_outline_rounded, 'Full Name', _userInfo['name']!),
@@ -270,42 +431,28 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ]),
                     const SizedBox(height: 20),
                     _buildSection('Quick Access', [
-                      _buildNavRow(Icons.family_restroom_rounded, 'Dependants', AppTheme.warning, 
-                          () => Navigator.pushNamed(context, AppRoutes.clientDependents)),
-                      _buildNavRow(Icons.verified_user_rounded, 'Authorized Persons', AppTheme.success, 
-                          () => Navigator.pushNamed(context, AppRoutes.clientAuthorized)),
-                      _buildNavRow(Icons.calendar_month_rounded, 'My Bookings', AppTheme.primary, 
-                          () => Navigator.pushNamed(context, AppRoutes.clientBooking)),
-                      _buildNavRow(Icons.history_rounded, 'Service History', const Color(0xFF6366F1), 
-                          () => Navigator.pushNamed(context, AppRoutes.clientHistory)),
-                      _buildNavRow(Icons.star_outline_rounded, 'Feedback & Complaints', const Color(0xFFF59E0B), 
-                          () => Navigator.pushNamed(context, AppRoutes.clientFeedback)),
+                      _buildNavRow(Icons.family_restroom_rounded, 'Dependants', AppTheme.warning, () => Navigator.pushNamed(context, AppRoutes.clientDependents)),
+                      _buildNavRow(Icons.verified_user_rounded, 'Authorized Persons', AppTheme.success, () => Navigator.pushNamed(context, AppRoutes.clientAuthorized)),
+                      _buildNavRow(Icons.calendar_month_rounded, 'My Bookings', AppTheme.primary, () => Navigator.pushNamed(context, AppRoutes.clientBooking)),
+                      _buildNavRow(Icons.history_rounded, 'Service History', const Color(0xFF6366F1), () => Navigator.pushNamed(context, AppRoutes.clientHistory)),
+                      _buildNavRow(Icons.star_outline_rounded, 'Feedback & Complaints', const Color(0xFFF59E0B), () => Navigator.pushNamed(context, AppRoutes.clientFeedback)),
                     ]),
                     const SizedBox(height: 20),
                     _buildSection('Preferences', [
-                      _buildToggleRow(Icons.notifications_outlined, 'Push Notifications', _notificationsEnabled, 
-                          (v) => setState(() => _notificationsEnabled = v)),
-                      _buildToggleRow(Icons.email_outlined, 'Email Alerts', _emailAlertsEnabled, 
-                          (v) => setState(() => _emailAlertsEnabled = v)),
+                      _buildToggleRow(Icons.notifications_outlined, 'Push Notifications', _notificationsEnabled, (v) => setState(() => _notificationsEnabled = v)),
+                      _buildToggleRow(Icons.email_outlined, 'Email Alerts', _emailAlertsEnabled, (v) => setState(() => _emailAlertsEnabled = v)),
                     ]),
                     const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: OutlinedButton.icon(
-                        onPressed: _confirmLogout,
-                        icon: const Icon(Icons.logout_rounded, color: AppTheme.error),
-                        label: Text(
-                          'Sign Out',
-                          style: GoogleFonts.plusJakartaSans(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.error),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: AppTheme.error),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    if (widget.targetUserId == null)
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: _confirmLogout,
+                          icon: const Icon(Icons.logout_rounded, color: AppTheme.error),
+                          label: const Text('Sign Out', style: TextStyle(color: AppTheme.error)),
+                          style: OutlinedButton.styleFrom(side: const BorderSide(color: AppTheme.error), padding: const EdgeInsets.symmetric(vertical: 14)),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 32),
                   ],
                 ),
               ),
@@ -322,12 +469,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       pinned: true,
       backgroundColor: AppTheme.primary,
       foregroundColor: Colors.white,
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.edit_outlined),
-          onPressed: _showEditProfile,
-        ),
-      ],
       flexibleSpace: FlexibleSpaceBar(
         background: Container(
           decoration: const BoxDecoration(gradient: AppTheme.heroGradient),
@@ -339,59 +480,57 @@ class _ProfileScreenState extends State<ProfileScreen>
                 Stack(
                   children: [
                     ClipOval(
-                      child: _profileImage != null && _profileImage!.isNotEmpty
-                          ? CachedNetworkImage(
-                              imageUrl: _profileImage!,
+                      child: _isUploading
+                          ? Container(
                               width: 80,
                               height: 80,
-                              fit: BoxFit.cover,
-                              errorWidget: (context, url, error) => Container(
-                                width: 80,
-                                height: 80,
-                                color: AppTheme.primaryContainer,
-                                child: const Icon(Icons.person_rounded, color: AppTheme.primary, size: 40),
-                              ),
+                              color: Colors.black.withOpacity(0.5),
+                              child: const Center(child: CircularProgressIndicator(color: Colors.white)),
                             )
-                          : Container(
-                              width: 80,
-                              height: 80,
-                              color: AppTheme.primaryLight,
-                              child: const Icon(Icons.person_rounded, color: Colors.white, size: 40),
+                          : (_profileImage != null && _profileImage!.isNotEmpty
+                              ? CachedNetworkImage(
+                                  imageUrl: _profileImage!,
+                                  width: 80,
+                                  height: 80,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, __, ___) => Container(
+                                    width: 80,
+                                    height: 80,
+                                    color: AppTheme.primaryContainer,
+                                    child: const Icon(Icons.person_rounded, color: AppTheme.primary, size: 40),
+                                  ),
+                                )
+                              : Container(
+                                  width: 80,
+                                  height: 80,
+                                  color: AppTheme.primaryLight,
+                                  child: const Icon(Icons.person_rounded, color: Colors.white, size: 40),
+                                )),
+                    ),
+                    if (widget.targetUserId == null)
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: GestureDetector(
+                          onTap: _updateProfileImage,
+                          child: Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
                             ),
-                    ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(
-                          color: AppTheme.secondary,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
+                            child: const Icon(Icons.camera_alt, size: 14, color: Colors.white),
+                          ),
                         ),
-                        child: const Icon(Icons.camera_alt_rounded, size: 12, color: Colors.white),
                       ),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                Text(
-                  _userInfo['name']!,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                  ),
-                ),
+                Text(_userInfo['name']!, style: GoogleFonts.plusJakartaSans(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
                 const SizedBox(height: 4),
-                Text(
-                  'Member since ${_userInfo['memberSince']}',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13,
-                    color: Colors.white.withAlpha(200),
-                  ),
-                ),
+                Text('Member since ${_userInfo['memberSince']}', style: GoogleFonts.plusJakartaSans(fontSize: 13, color: Colors.white.withAlpha(200))),
               ],
             ),
           ),
@@ -404,32 +543,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
-          ),
-        ),
+        Text(title, style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 12),
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(18),
-            boxShadow: [BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 10, offset: const Offset(0, 3))],
+            boxShadow: [BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 10)],
           ),
-          child: Column(
-            children: children.asMap().entries.map((e) {
-              final isLast = e.key == children.length - 1;
-              return Column(
-                children: [
-                  e.value,
-                  if (!isLast) const Divider(height: 1, indent: 56, color: AppTheme.divider),
-                ],
-              );
-            }).toList(),
-          ),
+          child: Column(children: children),
         ),
       ],
     );
@@ -443,10 +565,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           Container(
             width: 36,
             height: 36,
-            decoration: BoxDecoration(
-              color: AppTheme.primaryContainer.withAlpha(80),
-              borderRadius: BorderRadius.circular(10),
-            ),
+            decoration: BoxDecoration(color: AppTheme.primaryContainer.withAlpha(80), borderRadius: BorderRadius.circular(10)),
             child: Icon(icon, color: AppTheme.primary, size: 18),
           ),
           const SizedBox(width: 12),
@@ -454,23 +573,9 @@ class _ProfileScreenState extends State<ProfileScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 11,
-                    color: AppTheme.textMuted,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+                Text(label, style: GoogleFonts.plusJakartaSans(fontSize: 11, color: AppTheme.textMuted)),
                 const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 14,
-                    color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                Text(value, style: GoogleFonts.plusJakartaSans(fontSize: 14, fontWeight: FontWeight.w600)),
               ],
             ),
           ),
@@ -482,7 +587,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget _buildNavRow(IconData icon, String label, Color color, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
@@ -490,23 +594,11 @@ class _ProfileScreenState extends State<ProfileScreen>
             Container(
               width: 36,
               height: 36,
-              decoration: BoxDecoration(
-                color: color.withAlpha(25),
-                borderRadius: BorderRadius.circular(10),
-              ),
+              decoration: BoxDecoration(color: color.withAlpha(25), borderRadius: BorderRadius.circular(10)),
               child: Icon(icon, color: color, size: 18),
             ),
             const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 14,
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+            Expanded(child: Text(label, style: GoogleFonts.plusJakartaSans(fontSize: 14, fontWeight: FontWeight.w600))),
             const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted, size: 20),
           ],
         ),
@@ -522,28 +614,12 @@ class _ProfileScreenState extends State<ProfileScreen>
           Container(
             width: 36,
             height: 36,
-            decoration: BoxDecoration(
-              color: AppTheme.primaryContainer.withAlpha(80),
-              borderRadius: BorderRadius.circular(10),
-            ),
+            decoration: BoxDecoration(color: AppTheme.primaryContainer.withAlpha(80), borderRadius: BorderRadius.circular(10)),
             child: Icon(icon, color: AppTheme.primary, size: 18),
           ),
           const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              label,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 14,
-                color: AppTheme.textPrimary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            activeColor: AppTheme.primary,
-          ),
+          Expanded(child: Text(label, style: GoogleFonts.plusJakartaSans(fontSize: 14, fontWeight: FontWeight.w600))),
+          Switch(value: value, onChanged: onChanged, activeColor: AppTheme.primary),
         ],
       ),
     );
@@ -553,16 +629,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     return TextFormField(
       controller: ctrl,
       keyboardType: keyboardType,
-      style: GoogleFonts.plusJakartaSans(fontSize: 14, color: AppTheme.textPrimary),
+      style: GoogleFonts.plusJakartaSans(fontSize: 14),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: GoogleFonts.plusJakartaSans(fontSize: 13, color: AppTheme.textSecondary),
-        prefixIcon: Icon(icon, color: AppTheme.textMuted, size: 20),
-        filled: true,
-        fillColor: AppTheme.surfaceVariant,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.divider)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.divider)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.primary, width: 2)),
+        prefixIcon: Icon(icon, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       ),
       validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,

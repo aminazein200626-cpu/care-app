@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import '../../core/app_theme.dart';
 import '../../core/api_config.dart';
+import 'tracking_screen.dart';
 
 class RequestDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> requestData;
@@ -18,6 +19,7 @@ class RequestDetailsScreen extends StatefulWidget {
 
 class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
   bool _isProcessing = false;
+  List<Map<String, dynamic>> _taskFiles = [];
 
   List<dynamic> _safeList(dynamic value) {
     if (value == null) return [];
@@ -55,23 +57,55 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
     }
   }
 
+  Future<void> _fetchTaskFiles(String taskId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null) return;
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/task-files/$taskId'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body);
+        setState(() {
+          _taskFiles = List<Map<String, dynamic>>.from(data);
+        });
+      }
+    } catch (e) {
+      print('Error fetching task files: $e');
+    }
+  }
+
   void _acceptRequest() async {
     setState(() => _isProcessing = true);
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
-    if (token == null) return;
+    if (token == null) {
+      setState(() => _isProcessing = false);
+      return;
+    }
 
     try {
       final response = await http.put(
         Uri.parse('${ApiConfig.baseUrl}/api/provider/booking-requests/${widget.requestData['id']}/accept'),
         headers: {'Authorization': 'Bearer $token'},
       );
+      
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final bookingId = data['bookingId'];
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Request accepted"), backgroundColor: Colors.green),
           );
-          Navigator.pop(context, true);
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TrackingScreen(bookingId: bookingId),
+            ),
+          );
         }
       } else {
         throw Exception('Failed to accept');
@@ -91,7 +125,10 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
     setState(() => _isProcessing = true);
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
-    if (token == null) return;
+    if (token == null) {
+      setState(() => _isProcessing = false);
+      return;
+    }
 
     try {
       final response = await http.put(
@@ -120,11 +157,25 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    final taskId = widget.requestData['taskId'];
+    if (taskId != null && taskId.isNotEmpty) {
+      _fetchTaskFiles(taskId);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final dependent = widget.requestData['dependent'];
     final tasks = _safeList(widget.requestData['tasks']);
+    // Files from DependentFile collection are already inside dependent['files']
     final files = dependent != null ? _safeList(dependent['files']) : [];
+    final medicalInfo = dependent != null ? dependent['medicalInfo'] : null;
+    
+    final String requestStatus = widget.requestData['status']?.toString().toLowerCase() ?? '';
+    final bool isPending = requestStatus == 'pending';
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF121212) : const Color(0xFFF8F9FA),
@@ -141,7 +192,7 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
         elevation: 0,
         centerTitle: true,
         actions: [
-          if (widget.requestData['status'] == 'pending')
+          if (isPending)
             Row(
               children: [
                 IconButton(
@@ -179,6 +230,26 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
                 _infoRow(Icons.family_restroom, "Relationship", dependent['relationship'] ?? 'Not specified'),
                 _infoRow(Icons.cake_outlined, "Age", _safeAge(dependent['age'])),
                 _infoRow(Icons.medical_services, "Health Notes", dependent['healthNotes'] ?? 'No health notes'),
+                
+                // Medical Information (if available)
+                if (medicalInfo != null && (medicalInfo['bloodType']?.isNotEmpty == true ||
+                    medicalInfo['allergies']?.isNotEmpty == true ||
+                    medicalInfo['medications']?.isNotEmpty == true ||
+                    medicalInfo['conditions']?.isNotEmpty == true)) ...[
+                  const SizedBox(height: 12),
+                  const Text("Medical Details", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  if (medicalInfo['bloodType'] != null && medicalInfo['bloodType'].isNotEmpty)
+                    _infoRow(Icons.bloodtype, "Blood Type", medicalInfo['bloodType']),
+                  if (medicalInfo['allergies'] != null && medicalInfo['allergies'].isNotEmpty)
+                    _infoRow(Icons.warning, "Allergies", medicalInfo['allergies']),
+                  if (medicalInfo['medications'] != null && medicalInfo['medications'].isNotEmpty)
+                    _infoRow(Icons.medication, "Medications", medicalInfo['medications']),
+                  if (medicalInfo['conditions'] != null && medicalInfo['conditions'].isNotEmpty)
+                    _infoRow(Icons.health_and_safety, "Conditions", medicalInfo['conditions']),
+                ],
+                
+                // Files from DependentFile
                 if (files.isNotEmpty) _buildFilesSection(files, isDark),
               ] else
                 _infoRow(Icons.info_outline, "No dependant", "No dependant associated with this booking", isWarning: true),
@@ -219,13 +290,30 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
               ]),
             ],
 
+            if (_taskFiles.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              _buildSectionTitle("Client Attachments"),
+              _buildSimpleCard(isDark, [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _taskFiles.map((file) => GestureDetector(
+                    onTap: () => _openFile(file['url'] ?? ''),
+                    child: Chip(
+                      label: Text(file['name'] ?? 'File', style: const TextStyle(fontSize: 11)),
+                      avatar: const Icon(Icons.attach_file, size: 14),
+                      backgroundColor: AppTheme.primary.withOpacity(0.1),
+                    ),
+                  )).toList(),
+                ),
+              ]),
+            ],
+
             const SizedBox(height: 100),
           ],
         ),
       ),
-      bottomSheet: widget.requestData['status'] == 'pending'
-          ? _buildBottomActions(context, isDark)
-          : null,
+      bottomSheet: isPending ? _buildBottomActions(context, isDark) : null,
     );
   }
 

@@ -19,6 +19,7 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   bool _isActive = true;
   bool _isLoading = true;
+  bool _isLoadingServices = false; // ✅ إضافة حالة تحميل منفصلة للخدمات
 
   Map<String, dynamic> _providerData = {
     'name': '',
@@ -42,8 +43,7 @@ class _ProfilePageState extends State<ProfilePage> {
     },
   };
 
-  final String baseUrl = ApiConfig.baseUrl
-  ;
+  final String baseUrl = ApiConfig.baseUrl;
 
   @override
   void initState() {
@@ -54,7 +54,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   void dispose() {
-    // أي عمليات تنظيف إذا لزم الأمر
     super.dispose();
   }
 
@@ -77,7 +76,7 @@ class _ProfilePageState extends State<ProfilePage> {
         final data = jsonDecode(response.body);
         final providerDetails = data['providerDetails'] ?? {};
         final bankAccount = providerDetails['bankAccount'] ?? {};
-        
+
         if (mounted) {
           setState(() {
             _providerData = {
@@ -92,7 +91,7 @@ class _ProfilePageState extends State<ProfilePage> {
               'completionRate': providerDetails['completionRate'] ?? 0,
               'responseTime': providerDetails['responseTime'] ?? '5 min',
               'certificates': providerDetails['certificates'] ?? [],
-              'services': _providerData['services'] ?? [],
+              'services': _providerData['services'], // احتفظ بالخدمات الحالية مؤقتاً
               'ccp': providerDetails['ccp'] ?? '',
               'bankAccount': {
                 'bankName': bankAccount['bankName'] ?? '',
@@ -114,14 +113,20 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _fetchServices() async {
+    // ✅ استخدام endpoint خاص بالمزود بدلاً من admin
+    setState(() => _isLoadingServices = true);
+    
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
 
-    if (token == null) return;
+    if (token == null) {
+      if (mounted) setState(() => _isLoadingServices = false);
+      return;
+    }
 
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/api/admin/services'),
+        Uri.parse('$baseUrl/api/provider/services'), // ✅ تغيير المسار
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -134,11 +139,26 @@ class _ProfilePageState extends State<ProfilePage> {
               'price': s['price'],
               'active': s['isActive'] ?? true,
             }).toList();
+            _isLoadingServices = false;
+          });
+        }
+      } else {
+        // في حالة فشل الجلب، نضع قائمة فارغة ولا نعطل التطبيق
+        if (mounted) {
+          setState(() {
+            _providerData['services'] = [];
+            _isLoadingServices = false;
           });
         }
       }
     } catch (error) {
       print('Error fetching services: $error');
+      if (mounted) {
+        setState(() {
+          _providerData['services'] = [];
+          _isLoadingServices = false;
+        });
+      }
     }
   }
 
@@ -183,6 +203,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 MaterialPageRoute(builder: (_) => const EditProfilePage()),
               );
               _fetchProfile();
+              _fetchServices();
             },
           ),
         ],
@@ -265,7 +286,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     Icon(Icons.star, color: Colors.amber, size: 14),
                     const SizedBox(width: 4),
                     Text(
-                      "${_providerData['rating']}",
+                      _providerData['rating'].toString(),
                       style: TextStyle(color: Colors.grey[500], fontSize: 12),
                     ),
                     const SizedBox(width: 12),
@@ -435,14 +456,26 @@ class _ProfilePageState extends State<ProfilePage> {
                   color: isDark ? Colors.white : Colors.black87,
                 ),
               ),
-              TextButton(
-                onPressed: _fetchServices,
-                child: const Text("Refresh", style: TextStyle(color: AppTheme.primary)),
-              ),
+              if (_isLoadingServices)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                TextButton(
+                  onPressed: _fetchServices,
+                  child: const Text("Refresh", style: TextStyle(color: AppTheme.primary)),
+                ),
             ],
           ),
           const Divider(height: 24),
-          if (services.isEmpty)
+          if (_isLoadingServices)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (services.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 20),
               child: Center(child: Text("No services found")),

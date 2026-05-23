@@ -9,13 +9,17 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Dependent = require('../models/Dependent');
 const ServiceProvider = require('../models/ServiceProvider');
+const File = require('../models/File');
+const Feedback = require('../models/Feedback');
+const DependentFile = require('../models/DependentFile');     // ✅ Added
+const MedicalInfo = require('../models/MedicalInfo');         // ✅ Added
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 router.use(authMiddleware);
 
-// ========== إعداد مجلدات رفع الملفات ==========
+// Setup upload directories
 const workStepsDir = path.join(__dirname, '../uploads/worksteps');
 const attachmentsDir = path.join(__dirname, '../uploads/attachments');
 if (!fs.existsSync(workStepsDir)) fs.mkdirSync(workStepsDir, { recursive: true });
@@ -33,7 +37,7 @@ const attachmentStorage = multer.diskStorage({
 const uploadWorkStep = multer({ storage: workStepsStorage }).single('file');
 const uploadAttachment = multer({ storage: attachmentStorage }).single('file');
 
-// ========== Routes existantes ==========
+// Provider routes
 router.get('/services', providerController.getServices);
 router.get('/profile', providerController.getProfile);
 router.put('/profile', providerController.updateProfile);
@@ -58,9 +62,6 @@ router.get('/notifications', providerController.getNotifications);
 router.put('/notifications/:id/read', providerController.markNotificationRead);
 router.delete('/notifications/:id', providerController.deleteNotification);
 router.post('/notifications', providerController.createNotification);
-router.get('/reviews', providerController.getReviews);
-router.post('/reviews/:id/reply', providerController.replyToReview);
-router.post('/complaints', providerController.fileComplaint);
 router.get('/withdrawals', providerController.getWithdrawals);
 router.get('/calls', providerController.getCallHistory);
 router.get('/blocked-users', providerController.getBlockedUsers);
@@ -73,25 +74,63 @@ router.post('/availability', providerController.addAvailability);
 router.delete('/availability', providerController.deleteAvailability);
 router.get('/half-payments', providerController.getHalfPayments);
 
-// ========== تحديث حالة مهمة العميل ==========
+// Update client task status
 router.put('/bookings/:bookingId/tasks/:taskIndex', providerController.updateClientTaskStatus);
 
-// ========== إضافة خطوة عمل مع إمكانية رفع ملف ==========
+// Add work step with file upload
 router.post('/work-steps-with-file', uploadWorkStep, providerController.addWorkStepWithFile);
 
-// ========== رفع مرفق (صورة/فيديو) مع وصف ==========
+// Upload attachment
 router.post('/attachments/upload', uploadAttachment, providerController.uploadAttachment);
 
-// ========== تحديث الموقع الجغرافي ==========
+// Update GPS location
 router.post('/tracking/location', providerController.updateLocation);
 
-// ========== تقييم العميل من قبل المزود ==========
+// Provider rates client
 router.post('/bookings/:id/rate-client', providerController.rateClient);
 
-// ========== Get booking requests ==========
+// Get task files
+router.get('/task-files/:taskId', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const files = await File.find({ taskId });
+    res.json(files);
+  } catch (error) {
+    console.error('Error fetching task files:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// ==================== DEPENDENT DETAILS FOR PROVIDER ====================
+router.get('/dependents/:dependentId', async (req, res) => {
+  try {
+    const { dependentId } = req.params;
+    const dependent = await Dependent.findById(dependentId);
+    if (!dependent) {
+      return res.status(404).json({ message: 'Dependent not found' });
+    }
+
+    const files = await DependentFile.find({ dependentId: dependent._id });
+    const medicalInfo = dependent.medicalInfoId ? await MedicalInfo.findById(dependent.medicalInfoId) : null;
+
+    res.json({
+      ...dependent.toObject(),
+      files,
+      medicalInfo
+    });
+  } catch (error) {
+    console.error('Error fetching dependent details for provider:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// ==================== GET BOOKING REQUESTS (ENRICHED WITH FILES & MEDICAL INFO) ====================
 router.get('/booking-requests', async (req, res) => {
   try {
-    const requests = await BookingRequest.find({ providerId: req.user.userId }).sort({ createdAt: -1 });
+    const provider = await ServiceProvider.findOne({ userid: req.user.userId });
+    if (!provider) return res.json([]);
+
+    const requests = await BookingRequest.find({ providerId: provider._id }).sort({ createdAt: -1 });
     const formatted = await Promise.all(requests.map(async (reqDoc) => {
       let client = null;
       if (reqDoc.clientId) {
@@ -102,17 +141,22 @@ router.get('/booking-requests', async (req, res) => {
       if (dependentId) {
         const dep = await Dependent.findById(dependentId).lean();
         if (dep) {
+          // Fetch files and medical info from the new collections
+          const files = await DependentFile.find({ dependentId: dep._id });
+          const medicalInfo = dep.medicalInfoId ? await MedicalInfo.findById(dep.medicalInfoId) : null;
           dependent = {
             name: dep.fullName,
             relationship: dep.relationship,
             age: dep.dateOfBirth ? new Date().getFullYear() - new Date(dep.dateOfBirth).getFullYear() : null,
             healthNotes: dep.healthNotes || '',
-            files: dep.files || []
+            files: files || [],
+            medicalInfo: medicalInfo || {}
           };
         }
       }
       return {
         id: reqDoc._id,
+        clientId: reqDoc.clientId,
         clientName: client?.fullName || 'Unknown',
         clientEmail: client?.email || 'Not provided',
         clientPhone: client?.phoneNumber || 'Not provided',
@@ -128,7 +172,8 @@ router.get('/booking-requests', async (req, res) => {
         status: reqDoc.status,
         createdAt: reqDoc.createdAt,
         respondedAt: reqDoc.respondedAt,
-        dependent: dependent
+        dependent,
+        taskId: reqDoc.taskId
       };
     }));
     res.json(formatted);
@@ -138,11 +183,14 @@ router.get('/booking-requests', async (req, res) => {
   }
 });
 
-// ========== قبول طلب الحجز ==========
+// Accept booking request
 router.put('/booking-requests/:id/accept', async (req, res) => {
   try {
     const { id } = req.params;
-    const request = await BookingRequest.findOne({ _id: id, providerId: req.user.userId, status: 'pending' });
+    const provider = await ServiceProvider.findOne({ userid: req.user.userId });
+    if (!provider) return res.status(404).json({ message: 'Provider not found' });
+
+    const request = await BookingRequest.findOne({ _id: id, providerId: provider._id, status: 'pending' });
     if (!request) return res.status(404).json({ message: 'Request not found' });
 
     request.status = 'accepted';
@@ -150,8 +198,8 @@ router.put('/booking-requests/:id/accept', async (req, res) => {
     await request.save();
 
     const client = await User.findById(request.clientId);
-    const provider = await User.findById(request.providerId);
-    const providerDetails = await ServiceProvider.findOne({ userid: request.providerId });
+    const providerUser = await User.findById(req.user.userId);
+    const providerDetails = await ServiceProvider.findOne({ userid: req.user.userId });
     if (!providerDetails) return res.status(400).json({ message: 'Provider details incomplete' });
 
     const hourlyRate = providerDetails.hourlyRate || 0;
@@ -164,9 +212,9 @@ router.put('/booking-requests/:id/accept', async (req, res) => {
       client: client.fullName,
       clientId: request.clientId,
       clientPhone: client.phoneNumber,
-      provider: provider.fullName,
-      providerId: request.providerId,
-      providerPhone: provider.phoneNumber,
+      provider: providerUser.fullName,
+      providerId: req.user.userId,
+      providerPhone: providerUser.phoneNumber,
       service: request.serviceName,
       date: new Date(request.date),
       startTime: request.startTime,
@@ -175,43 +223,47 @@ router.put('/booking-requests/:id/accept', async (req, res) => {
       notes: request.notes,
       dependentId: request.dependantId || request.dependentId,
       status: 'Confirmed',
-      totalPrice: totalPrice,
+      totalPrice,
       paymentStatus: 'Pending',
-      clientTasks: request.tasks ? request.tasks.map(t => ({ taskName: t.taskName, status: 'pending' })) : []
+      clientTasks: request.tasks ? request.tasks.map(t => ({ taskName: t.taskName, status: 'pending' })) : [],
+      taskId: request.taskId
     });
     await booking.save();
 
     await Notification.create({
       userId: request.clientId,
       title: 'Booking Accepted',
-      message: `${provider.fullName} has accepted your booking request. Please complete half payment to start tracking.`,
+      message: `${providerUser.fullName} has accepted your booking request. Please complete half payment to start tracking.`,
       type: 'booking',
       bookingId: booking._id
     });
 
-    res.json({ message: 'Booking request accepted', bookingId: booking._id, totalPrice: totalPrice, halfAmount: totalPrice / 2 });
+    res.json({ message: 'Booking request accepted', bookingId: booking._id, totalPrice, halfAmount: totalPrice / 2 });
   } catch (error) {
     console.error('Accept booking error:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// ========== رفض طلب الحجز ==========
+// Reject booking request
 router.put('/booking-requests/:id/reject', async (req, res) => {
   try {
     const { id } = req.params;
-    const request = await BookingRequest.findOne({ _id: id, providerId: req.user.userId, status: 'pending' });
+    const provider = await ServiceProvider.findOne({ userid: req.user.userId });
+    if (!provider) return res.status(404).json({ message: 'Provider not found' });
+
+    const request = await BookingRequest.findOne({ _id: id, providerId: provider._id, status: 'pending' });
     if (!request) return res.status(404).json({ message: 'Request not found' });
 
     request.status = 'rejected';
     request.respondedAt = new Date();
     await request.save();
 
-    const provider = await User.findById(req.user.userId);
+    const providerUser = await User.findById(req.user.userId);
     await Notification.create({
       userId: request.clientId,
       title: 'Booking Rejected',
-      message: `${provider.fullName} has rejected your booking request.`,
+      message: `${providerUser.fullName} has rejected your booking request.`,
       type: 'booking'
     });
 
@@ -222,7 +274,7 @@ router.put('/booking-requests/:id/reject', async (req, res) => {
   }
 });
 
-// ========== التوفرية ==========
+// Availability routes
 router.get('/availability', providerController.getAvailability);
 router.post('/availability', providerController.addAvailability);
 router.delete('/availability', providerController.deleteAvailability);
@@ -249,6 +301,85 @@ router.get('/availability/:providerId', async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+// Reviews (using Feedback model)
+router.get('/reviews', async (req, res) => {
+  try {
+    const providerId = req.user.userId;
+    const feedbacks = await Feedback.find({ providerId })
+      .populate('clientId', 'fullName')
+      .populate('bookingId', 'service date')
+      .sort({ createdAt: -1 });
+
+    const formatted = feedbacks.map(f => ({
+      id: f._id,
+      client: f.clientId?.fullName || 'Unknown',
+      rating: f.overall_rating,
+      comment: f.comment,
+      reply: f.reply,
+      date: f.createdAt.toISOString().split('T')[0],
+      service: f.bookingId?.service || 'Service',
+      replied: !!f.reply
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error('Get reviews error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Reply to a review
+router.post('/reviews/:id/reply', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reply } = req.body;
+    const providerId = req.user.userId;
+
+    if (!reply) {
+      return res.status(400).json({ message: 'Reply message is required' });
+    }
+
+    const feedback = await Feedback.findById(id);
+    if (!feedback) {
+      return res.status(404).json({ message: 'Review not found' });
+    }
+
+    if (feedback.providerId.toString() !== providerId) {
+      return res.status(403).json({ message: 'Unauthorized to reply to this review' });
+    }
+
+    feedback.reply = reply;
+    feedback.replyAt = new Date();
+    await feedback.save();
+
+    if (feedback.bookingId) {
+      await Booking.findByIdAndUpdate(feedback.bookingId, { feedbackReply: reply });
+    }
+
+    await Notification.create({
+      userId: feedback.clientId,
+      title: 'Provider Replied to Your Review',
+      message: `Provider replied: ${reply}`,
+      type: 'review',
+      bookingId: feedback.bookingId
+    });
+
+    res.json({ message: 'Reply sent to review', reply });
+  } catch (error) {
+    console.error('Reply to review error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Other routes
+router.post('/complaints', providerController.fileComplaint);
+router.get('/withdrawals', providerController.getWithdrawals);
+router.get('/calls', providerController.getCallHistory);
+router.get('/blocked-users', providerController.getBlockedUsers);
+router.post('/block/:userId', providerController.blockUser);
+router.delete('/block/:userId', providerController.unblockUser);
+router.delete('/account', providerController.deleteAccount);
 
 function parseTimeToHours(timeStr) {
   if (!timeStr || typeof timeStr !== 'string') return 0;
