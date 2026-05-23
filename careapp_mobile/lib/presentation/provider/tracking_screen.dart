@@ -10,6 +10,7 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/api_config.dart';
 import '../../core/app_theme.dart';
+import '../client/chat_screen.dart';  // ✅ استيراد ChatScreen الموحد
 
 class TrackingScreen extends StatefulWidget {
   final String? bookingId;
@@ -29,11 +30,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
   IO.Socket? _socket;
   bool _isConnected = false;
 
- 
+  bool _isDisposed = false;
+
   Map<String, dynamic>? _dependent;
   List<Map<String, dynamic>> _dependentFiles = [];
   List<Map<String, dynamic>> _taskFiles = [];
-
 
   bool _accepted = false;
   bool _onWay = false;
@@ -53,6 +54,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   @override
   void initState() {
     super.initState();
+    _isDisposed = false;
     _fetchData();
     _requestLocationPermission();
     _connectSocket();
@@ -60,6 +62,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _locationTimer?.cancel();
     _socket?.disconnect();
     _socket?.dispose();
@@ -78,20 +81,23 @@ class _TrackingScreenState extends State<TrackingScreen> {
     });
 
     _socket!.onConnect((_) {
+      if (_isDisposed) return;
       debugPrint('✅ Provider socket connected');
-      _isConnected = true;
+      setState(() => _isConnected = true);
       _joinTrackingRoom();
     });
 
     _socket!.on('trackingUpdate', (data) {
+      if (_isDisposed) return;
       if (data['bookingId'] == _actualBookingId) {
         _handleTrackingUpdate(data);
       }
     });
 
     _socket!.on('disconnect', (_) {
+      if (_isDisposed) return;
       debugPrint('⚠️ Provider socket disconnected');
-      _isConnected = false;
+      setState(() => _isConnected = false);
     });
   }
 
@@ -103,7 +109,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _handleTrackingUpdate(Map<String, dynamic> data) {
-    if (!mounted) return;
+    if (!mounted || _isDisposed) return;
     if (data['paymentStatus'] != null) {
       setState(() {
         _data['paymentStatus'] = data['paymentStatus'];
@@ -208,6 +214,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _showSnackBar(String msg, Color color) {
+    if (!mounted || _isDisposed) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: color, duration: const Duration(seconds: 2))
     );
@@ -294,6 +301,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _checkAndShowClientRatingDialog() {
+    if (!mounted || _isDisposed) return;
     final paymentStatus = _data['paymentStatus'] ?? 'Pending';
     final clientRating = _data['clientRating'];
     if (_completed && paymentStatus == 'Completed' && clientRating == null && !_ratingDialogShown) {
@@ -303,6 +311,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _showRateClientDialog() {
+    if (!mounted || _isDisposed) return;
     int rating = 0;
     String comment = '';
     showDialog(
@@ -335,13 +344,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                _ratingDialogShown = false;
-              },
-              child: const Text("Skip"),
-            ),
+            TextButton(onPressed: () {
+              Navigator.pop(ctx);
+              _ratingDialogShown = false;
+            }, child: const Text("Skip")),
             ElevatedButton(
               onPressed: () async {
                 if (rating == 0) {
@@ -661,8 +667,15 @@ class _TrackingScreenState extends State<TrackingScreen> {
         backgroundColor: AppTheme.primary,
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.chat_outlined, color: Colors.white),
+            onPressed: _startChat,
+          ),
           if (_isUpdating)
-            const Padding(padding: EdgeInsets.all(8), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))),
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+            ),
         ],
       ),
       body: ListView(
@@ -731,7 +744,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
             const SizedBox(height: 16),
           ],
 
-          // Task Files (رفعها العميل عند إنشاء الطلب)
+          // Task Files
           if (_taskFiles.isNotEmpty) ...[
             Container(
               padding: const EdgeInsets.all(16),
@@ -975,6 +988,58 @@ class _TrackingScreenState extends State<TrackingScreen> {
           const SizedBox(width: 12),
           Text(title, style: TextStyle(decoration: isDone ? TextDecoration.lineThrough : null, color: isDone ? Colors.green : null)),
         ],
+      ),
+    );
+  }
+
+  // ✅ دالة الدردشة المعدلة لاستخدام ChatScreen الموحد
+  void _startChat() {
+    if (!mounted) return;
+    
+    // استخراج clientId
+    String clientId = '';
+    dynamic clientIdField = _data['clientId'];
+    
+    if (clientIdField != null) {
+      if (clientIdField is String) {
+        clientId = clientIdField;
+      } else if (clientIdField is Map) {
+        clientId = clientIdField['_id']?.toString() ?? '';
+      }
+    }
+    
+    if (clientId.isEmpty && _data['client'] is Map) {
+      clientId = (_data['client'] as Map)['_id']?.toString() ?? '';
+    }
+    
+    // اسم العميل
+    String clientName = _data['client']?.toString() ?? '';
+    if (clientName.isEmpty && _data['client'] is Map) {
+      clientName = (_data['client'] as Map)['fullName']?.toString() ?? 'Client';
+    }
+    
+    final bookingId = _actualBookingId;
+    
+    if (clientId.isEmpty) {
+      _showSnackBar("Cannot start chat: client ID missing.", Colors.red);
+      return;
+    }
+    
+    if (bookingId.isEmpty) {
+      _showSnackBar("Cannot start chat: booking ID missing.", Colors.red);
+      return;
+    }
+    
+    // ✅ استخدام ChatScreen الموحد مع otherUserId و otherUserName
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          bookingId: bookingId,
+          otherUserId: clientId,
+          otherUserName: clientName.isNotEmpty ? clientName : 'Client',
+          socket: _socket,
+        ),
       ),
     );
   }

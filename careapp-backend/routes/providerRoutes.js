@@ -295,7 +295,82 @@ router.get('/availability/:providerId', async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+// ==================== CHAT MESSAGES ====================
+// جلب رسائل حجز معين (للمزود)
+router.get('/bookings/:bookingId/messages', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.userId;
 
+    const booking = await Booking.findOne({ _id: bookingId, providerId }).select('messages');
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    const messages = Array.isArray(booking.messages) ? booking.messages : [];
+    res.json(messages);
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// إرسال رسالة جديدة (للمزود)
+router.post('/bookings/:bookingId/messages', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const providerId = req.user.userId;
+    const { message } = req.body;
+
+    if (!message || message.trim() === '') {
+      return res.status(400).json({ message: 'Message cannot be empty' });
+    }
+
+    const booking = await Booking.findOne({ _id: bookingId, providerId });
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // جلب اسم المزود
+    const providerUser = await User.findById(providerId).select('fullName');
+    const senderName = providerUser?.fullName || 'Provider';
+
+    const newMessage = {
+      senderId: providerId,
+      senderName: senderName,
+      message: message.trim(),
+      timestamp: new Date(),
+      isRead: false
+    };
+
+    if (!booking.messages) booking.messages = [];
+    booking.messages.push(newMessage);
+    await booking.save();
+
+    // إعلام العميل عبر Socket.io
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`booking_${bookingId}`).emit('newBookingMessage', {
+        bookingId,
+        message: newMessage
+      });
+    }
+
+    // إشعار للعميل
+    await Notification.create({
+      userId: booking.clientId,
+      title: 'New Message',
+      message: `${senderName}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
+      type: 'message',
+      bookingId: booking._id
+    });
+
+    res.status(201).json({ message: 'Message sent', data: newMessage });
+  } catch (error) {
+    console.error('Error sending message:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
 // ==================== REVIEWS ====================
 router.get('/reviews', async (req, res) => {
   try {

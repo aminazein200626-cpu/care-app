@@ -104,6 +104,15 @@ const bookingSchema = new mongoose.Schema({
     default: null
   },
 
+  // ==================== Chat Messages (embedded) ====================
+  messages: [{
+    senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    senderName: { type: String, required: true },
+    message: { type: String, required: true },
+    timestamp: { type: Date, default: Date.now },
+    isRead: { type: Boolean, default: false }
+  }],
+
   // ==================== Timestamps ====================
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
@@ -116,5 +125,8 @@ bookingSchema.index(
   { clientId: 1, providerId: 1, date: 1, startTime: 1 },
   { unique: true }
 );
+
+// Index for messages (optional)
+bookingSchema.index({ 'messages.timestamp': -1 });
 
 module.exports = mongoose.model('Booking', bookingSchema);

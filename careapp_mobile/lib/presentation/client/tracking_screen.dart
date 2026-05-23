@@ -11,6 +11,7 @@ import '../../core/app_routes.dart';
 import '../../core/api_config.dart';
 import '../../services/client_api_service.dart';
 import '../client/call_screen.dart';
+import 'chat_screen.dart';   // ChatScreen الموحد (باستخدام otherUserId, otherUserName)
 
 class TrackingScreen extends StatefulWidget {
   final String bookingId;
@@ -27,7 +28,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   bool _isLoading = true;
   bool _isConnected = false;
   bool _isProcessing = false;
-  bool _isDisposed = false; // حماية إضافية
+  bool _isDisposed = false;
   
   Map<String, dynamic> _bookingData = {};
   double _remainingAmount = 0.0;
@@ -308,13 +309,34 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
+  // ✅ دالة الدردشة المعدلة (تستخدم otherUserId و otherUserName)
   void _startChat() {
     if (_isDisposed) return;
-    Navigator.pushNamed(context, AppRoutes.clientChat, arguments: {
-      'providerId': _bookingData['providerId'],
-      'providerName': _bookingData['provider'],
-      'bookingId': widget.bookingId,
-    });
+    
+    final providerId = _bookingData['providerId']?.toString();
+    final providerName = _bookingData['provider']?.toString() ?? '';
+    
+    if (providerId == null || providerId.isEmpty) {
+      _showError('Cannot start chat: provider ID missing. Please refresh or contact support.');
+      return;
+    }
+    
+    if (providerName.isEmpty) {
+      _showError('Cannot start chat: provider name not available.');
+      return;
+    }
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          bookingId: widget.bookingId,
+          otherUserId: providerId,
+          otherUserName: providerName,
+          socket: _socket,
+        ),
+      ),
+    );
   }
 
   void _startAudioCall() {

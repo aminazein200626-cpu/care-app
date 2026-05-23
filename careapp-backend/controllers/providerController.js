@@ -260,9 +260,7 @@ exports.getBookingDetails = async (req, res) => {
     
     let dependentInfo = null;
     if (booking.dependentId) {
-      // Fetch files from DependentFile collection
       const files = await DependentFile.find({ dependentId: booking.dependentId._id });
-      // Fetch medical info
       const medicalInfo = booking.dependentId.medicalInfoId 
         ? await MedicalInfo.findById(booking.dependentId.medicalInfoId)
         : null;
@@ -285,9 +283,11 @@ exports.getBookingDetails = async (req, res) => {
       clientLng = booking.clientId.longitude;
     }
 
+    // ✅ أضف clientId هنا
     res.json({
       id: booking._id,
       client: booking.clientId?.fullName || 'Unknown',
+      clientId: booking.clientId?._id,           // ✅ هذا هو التعديل المطلوب
       clientPhone: booking.clientId?.phoneNumber || '',
       service: booking.serviceId?.name || booking.service,
       date: booking.date,

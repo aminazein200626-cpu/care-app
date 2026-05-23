@@ -1,274 +1,273 @@
-import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-
+import 'package:intl/intl.dart';
 import '../../core/app_theme.dart';
-import 'call_screen.dart';
-
-class ChatMessage {
-  final String id;
-  final String text;
-  final bool isMe;
-  final DateTime timestamp;
-  bool isRead;
-
-  ChatMessage({
-    required this.id,
-    required this.text,
-    required this.isMe,
-    required this.timestamp,
-    this.isRead = false,
-  });
-
-  factory ChatMessage.fromJson(Map<String, dynamic> json, String currentUserId) {
-    return ChatMessage(
-      id: json['_id'] ?? json['id'] ?? '',
-      text: json['message'] ?? '',
-      isMe: json['senderId'] == currentUserId,
-      timestamp: json['timestamp'] != null ? DateTime.parse(json['timestamp']) : DateTime.now(),
-      isRead: json['isRead'] ?? false,
-    );
-  }
-}
+import '../../core/api_config.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String providerId;
-  final String providerName;
-  final String? providerAvatar;
-  final String? bookingId;
+  final String bookingId;
+  final String otherUserId;
+  final String otherUserName;
+  final IO.Socket? socket;
 
   const ChatScreen({
     super.key,
-    required this.providerId,
-    required this.providerName,
-    this.providerAvatar,
-    this.bookingId,
+    required this.bookingId,
+    required this.otherUserId,
+    required this.otherUserName,
+    this.socket,
   });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
-  final TextEditingController _messageController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  
-  IO.Socket? _socket;
-  String? _currentUserId;
+class _ChatScreenState extends State<ChatScreen> {
+  List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
-  bool _isConnected = false;
-  bool _isTyping = false;
-  Timer? _typingTimer;
+  bool _isSending = false;
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  String? _currentUserId;
+  String? _currentUserRole;
+  bool _socketListenerSet = false;
+  Timer? _pollingTimer;
   
-  List<ChatMessage> _messages = [];
-  String _conversationId = '';
+  // ✅ تخزين معرفات الرسائل + بصمة نصية لمنع التكرار
+  final Set<String> _messageKeys = {};
 
   @override
   void initState() {
     super.initState();
-    _loadCurrentUser();
-    _connectSocket();
+    _getCurrentUser();
     _loadMessages();
+    _setupSocketListener();
+    _startPollingIfNeeded();
   }
 
-  @override
-  void dispose() {
-    _typingTimer?.cancel();
-    _messageController.dispose();
-    _scrollController.dispose();
-    _socket?.disconnect();
-    super.dispose();
-  }
-
-  Future<void> _loadCurrentUser() async {
+  Future<void> _getCurrentUser() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _currentUserId = prefs.getString('userId');
-      if (_currentUserId != null) {
-        _conversationId = _getConversationId(_currentUserId!, widget.providerId);
-      }
-    });
+    if (mounted) {
+      setState(() {
+        _currentUserId = prefs.getString('userId');
+        _currentUserRole = prefs.getString('role');
+      });
+    }
+    _joinBookingRoom();
   }
 
-  String _getConversationId(String user1, String user2) {
-    List<String> ids = [user1, user2];
-    ids.sort();
-    return ids.join('_');
-  }
-
-  void _connectSocket() {
-    _socket = IO.io('http://10.0.2.2:5001', {
-      'transports': ['websocket'],
-      'autoConnect': true,
-    });
-
-    _socket!.onConnect((_) {
-      setState(() => _isConnected = true);
-      _joinRoom();
-    });
-
-    _socket!.on('newMessage', (data) {
-      if (data['conversationId'] == _conversationId) {
-        _addNewMessage(data, isFromMe: false);
-      }
-    });
-
-    _socket!.on('messageSent', (data) {
-      if (data['conversationId'] == _conversationId) {
-        _addNewMessage(data, isFromMe: true);
-      }
-    });
-
-    _socket!.on('typing', (data) {
-      if (data['senderId'] == widget.providerId && data['isTyping'] == true) {
-        setState(() => _isTyping = true);
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) setState(() => _isTyping = false);
-        });
-      }
-    });
-
-    _socket!.on('disconnect', (_) {
-      setState(() => _isConnected = false);
-    });
-  }
-
-  void _joinRoom() {
-    if (_currentUserId != null) {
-      _socket?.emit('join', _currentUserId);
+  void _joinBookingRoom() {
+    if (widget.socket != null && widget.socket!.connected && _currentUserId != null) {
+      widget.socket!.emit('joinBookingRoom', widget.bookingId);
     }
   }
 
-  Future<void> _loadMessages() async {
-    setState(() => _isLoading = true);
-    
-    try {
-      final token = await _getToken();
-      final response = await http.get(
-        Uri.parse('http://10.0.2.2:5001/api/provider/chats/messages/${widget.providerId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      
-      if (response.statusCode == 200) {
-        final List data = jsonDecode(response.body);
-        setState(() {
-          _messages = data.map((m) => ChatMessage.fromJson(m, _currentUserId!)).toList();
-          _isLoading = false;
-        });
-        _scrollToBottom();
-      } else {
-        setState(() => _isLoading = false);
-      }
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load messages: $e'),
-            backgroundColor: AppTheme.error,
-          ),
+  void _setupSocketListener() {
+    if (_socketListenerSet) return;
+    _socketListenerSet = true;
+
+    widget.socket?.off('newBookingMessage');
+    widget.socket?.on('newBookingMessage', (data) {
+      if (!mounted) return;
+      if (data['bookingId'] == widget.bookingId) {
+        final msg = data['message'];
+        final isMe = msg['senderId'] == _currentUserId;
+        _addMessageIfNew(
+          id: msg['_id']?.toString(),
+          text: msg['message'],
+          isMe: isMe,
+          timestamp: DateTime.parse(msg['timestamp']),
+          senderName: msg['senderName'],
         );
       }
+    });
+
+    widget.socket?.off('connect');
+    widget.socket?.on('connect', (_) {
+      _joinBookingRoom();
+      // ✅ بمجرد اتصال Socket، نلغي Polling
+      _pollingTimer?.cancel();
+      _pollingTimer = null;
+    });
+  }
+
+  // ✅ دالة قوية لمنع التكرار
+  void _addMessageIfNew({
+    required String? id,
+    required String text,
+    required bool isMe,
+    required DateTime timestamp,
+    required String senderName,
+  }) {
+    if (!mounted) return;
+
+    // إنشاء مفتاح فريد للرسالة
+    final uniqueKey = id ?? '${timestamp.millisecondsSinceEpoch}_$text';
+    if (_messageKeys.contains(uniqueKey)) return;
+
+    _messageKeys.add(uniqueKey);
+    setState(() {
+      _messages.add({
+        'key': uniqueKey,
+        'text': text,
+        'isMe': isMe,
+        'timestamp': timestamp,
+        'senderName': senderName,
+      });
+    });
+    _scrollToBottom();
+  }
+
+  String _getMessagesEndpoint() {
+    if (_currentUserRole == 'Client') {
+      return '/api/client/bookings/${widget.bookingId}/messages';
+    } else if (_currentUserRole == 'Provider') {
+      return '/api/provider/bookings/${widget.bookingId}/messages';
+    } else {
+      return '/api/client/bookings/${widget.bookingId}/messages';
     }
   }
 
-  Future<String?> _getToken() async {
+  bool _isLoadingMessages = false;
+  Future<void> _loadMessages() async {
+    if (_isLoadingMessages) return;
+    _isLoadingMessages = true;
+    if (mounted) setState(() => _isLoading = true);
+
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('token');
+    final token = prefs.getString('token');
+    if (token == null) {
+      if (mounted) setState(() => _isLoading = false);
+      _isLoadingMessages = false;
+      return;
+    }
+
+    final endpoint = _getMessagesEndpoint();
+
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}$endpoint'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body);
+        if (mounted) {
+          int addedCount = 0;
+          for (var item in data) {
+            final id = item['_id']?.toString();
+            final text = item['message'];
+            final isMe = item['senderId'] == _currentUserId;
+            final timestamp = DateTime.parse(item['timestamp']);
+            final senderName = item['senderName'];
+            final uniqueKey = id ?? '${timestamp.millisecondsSinceEpoch}_$text';
+            if (!_messageKeys.contains(uniqueKey)) {
+              _messageKeys.add(uniqueKey);
+              _messages.add({
+                'key': uniqueKey,
+                'text': text,
+                'isMe': isMe,
+                'timestamp': timestamp,
+                'senderName': senderName,
+              });
+              addedCount++;
+            }
+          }
+          if (addedCount > 0) {
+            _messages.sort((a, b) => a['timestamp'].compareTo(b['timestamp']));
+            _scrollToBottom();
+          }
+          setState(() => _isLoading = false);
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (error) {
+      print('Error loading messages: $error');
+      if (mounted) setState(() => _isLoading = false);
+    }
+    _isLoadingMessages = false;
   }
 
-  void _sendMessage() async {
-    if (_messageController.text.trim().isEmpty) return;
-    
-    final messageText = _messageController.text.trim();
-    _messageController.clear();
-    
-    final tempMessage = ChatMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      text: messageText,
-      isMe: true,
-      timestamp: DateTime.now(),
-    );
-    setState(() {
-      _messages.add(tempMessage);
-    });
-    _scrollToBottom();
-    
-    try {
-      final token = await _getToken();
-      final response = await http.post(
-        Uri.parse('http://10.0.2.2:5001/api/provider/chats/messages/${widget.providerId}'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({'message': messageText}),
-      );
-      
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _socket?.emit('sendMessage', {
-          'conversationId': _conversationId,
-          'senderId': _currentUserId,
-          'receiverId': widget.providerId,
-          'message': messageText,
-          'timestamp': DateTime.now().toIso8601String(),
-        });
-      } else {
-        setState(() {
-          _messages.removeWhere((m) => m.id == tempMessage.id);
-        });
-        throw Exception('Failed to send message');
-      }
-    } catch (e) {
-      setState(() {
-        _messages.removeWhere((m) => m.id == tempMessage.id);
+  void _startPollingIfNeeded() {
+    // ✅ نبدأ Polling فقط إذا لم يكن هناك Socket (أو كان Socket معطلاً)
+    _pollingTimer?.cancel();
+    if (widget.socket == null) {
+      _pollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        _loadMessages();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to send message: $e'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
     }
   }
 
-  void _addNewMessage(Map<String, dynamic> data, {required bool isFromMe}) {
-    final newMessage = ChatMessage(
-      id: data['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      text: data['message'],
-      isMe: isFromMe,
-      timestamp: DateTime.parse(data['timestamp']),
-    );
-    setState(() {
-      _messages.add(newMessage);
-    });
-    _scrollToBottom();
+  Future<void> _sendMessage() async {
+    if (_controller.text.trim().isEmpty || _isSending) return;
+    final text = _controller.text.trim();
+    _controller.clear();
+    setState(() => _isSending = true);
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null) {
+      if (mounted) setState(() => _isSending = false);
+      _showSnackBar('Not authenticated', Colors.red);
+      return;
+    }
+
+    final endpoint = _getMessagesEndpoint();
+
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}$endpoint'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: jsonEncode({'message': text}),
+      );
+      if (response.statusCode == 201) {
+        final newMessage = jsonDecode(response.body);
+        final msgData = newMessage['data'] ?? newMessage;
+        final id = msgData['_id']?.toString();
+        
+        // ✅ إرسال عبر Socket إذا كان متاحاً
+        widget.socket?.emit('sendBookingMessage', {
+          'bookingId': widget.bookingId,
+          'message': text,
+        });
+        
+        // ✅ إضافة محلية فقط إذا لم يكن هناك Socket (أو Socket غير متصل)
+        // لتجنب التكرار، ننتظر وصول الرسالة عبر Socket أو Polling.
+        if (widget.socket == null || !widget.socket!.connected) {
+          _addMessageIfNew(
+            id: id,
+            text: text,
+            isMe: true,
+            timestamp: DateTime.now(),
+            senderName: 'Me',
+          );
+        }
+      } else {
+        print('❌ Failed to send message: ${response.statusCode} - ${response.body}');
+        _showSnackBar('Failed to send message (${response.statusCode})', Colors.red);
+      }
+    } catch (error) {
+      print('Error sending message: $error');
+      _showSnackBar('Error: $error', Colors.red);
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
   }
 
-  void _sendTypingIndicator() {
-    if (_typingTimer != null && _typingTimer!.isActive) return;
-    
-    _socket?.emit('typing', {
-      'conversationId': _conversationId,
-      'senderId': _currentUserId,
-      'receiverId': widget.providerId,
-      'isTyping': true,
-    });
-    
-    _typingTimer = Timer(const Duration(seconds: 2), () {
-      _socket?.emit('typing', {
-        'conversationId': _conversationId,
-        'senderId': _currentUserId,
-        'receiverId': widget.providerId,
-        'isTyping': false,
-      });
-      _typingTimer = null;
-    });
+  void _showSnackBar(String msg, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: color, duration: const Duration(seconds: 2)),
+    );
   }
 
   void _scrollToBottom() {
@@ -284,33 +283,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   void _deleteMessage(int index) {
+    final key = _messages[index]['key'];
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          'Delete Message',
-          style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700),
-        ),
-        content: Text(
-          'Are you sure you want to delete this message?',
-          style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary),
-        ),
+        title: const Text("Delete Message"),
+        content: const Text("Are you sure you want to delete this message?"),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
           ElevatedButton(
             onPressed: () {
-              setState(() => _messages.removeAt(index));
+              setState(() {
+                _messages.removeAt(index);
+                _messageKeys.remove(key);
+              });
               Navigator.pop(ctx);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.error,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('Delete', style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("Delete"),
           ),
         ],
       ),
@@ -318,45 +309,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   String _formatTime(DateTime time) {
-    final now = DateTime.now();
-    final diff = now.difference(time);
-    
-    if (diff.inMinutes < 1) return 'Just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return DateFormat('MMM d, hh:mm a').format(time);
+    return DateFormat('hh:mm a').format(time);
   }
 
-  void _startAudioCall() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CallScreen(
-          providerId: widget.providerId,
-          providerName: widget.providerName,
-          callType: 'audio',
-        ),
-      ),
-    );
-  }
-
-  void _startVideoCall() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CallScreen(
-          providerId: widget.providerId,
-          providerName: widget.providerName,
-          callType: 'video',
-        ),
-      ),
-    );
+  @override
+  void dispose() {
+    _pollingTimer?.cancel();
+    widget.socket?.off('newBookingMessage');
+    widget.socket?.off('connect');
+    _controller.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -365,37 +333,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             CircleAvatar(
               radius: 18,
               backgroundColor: AppTheme.primary.withOpacity(0.1),
-              child: widget.providerAvatar != null
-                  ? ClipOval(
-                      child: Image.network(
-                        widget.providerAvatar!,
-                        width: 36,
-                        height: 36,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 18, color: AppTheme.primary),
-                      ),
-                    )
-                  : const Icon(Icons.person, size: 18, color: AppTheme.primary),
+              child: const Icon(Icons.person, color: AppTheme.primary, size: 18),
             ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.providerName,
-                  style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold),
-                ),
-                if (_isTyping)
-                  Text(
-                    'Typing...',
-                    style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w500),
-                  )
-                else if (_isConnected)
-                  Text(
-                    'Online',
-                    style: TextStyle(fontSize: 11, color: Colors.green[400]),
-                  ),
-              ],
+            const SizedBox(width: 8),
+            Text(
+              widget.otherUserName,
+              style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -403,77 +346,57 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         centerTitle: false,
         elevation: 0,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.call_outlined),
-            onPressed: _startAudioCall,
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam_outlined),
-            onPressed: _startVideoCall,
-          ),
+          IconButton(icon: const Icon(Icons.call), onPressed: () {}),
+          IconButton(icon: const Icon(Icons.videocam), onPressed: () {}),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _messages.isEmpty
-                    ? _buildEmptyState(isDark)
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final message = _messages[index];
-                          return GestureDetector(
-                            onLongPress: () => _deleteMessage(index),
-                            child: _buildMessageBubble(message, isDark),
-                          );
-                        },
-                      ),
-          ),
-          _buildInputBar(isDark),
-        ],
-      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Expanded(
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(16),
+                    reverse: true,
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[_messages.length - 1 - index];
+                      return GestureDetector(
+                        onLongPress: () => _deleteMessage(_messages.length - 1 - index),
+                        child: _messageBubble(msg, isDark),
+                      );
+                    },
+                  ),
+                ),
+                _buildInputBar(isDark),
+              ],
+            ),
     );
   }
 
-  Widget _buildMessageBubble(ChatMessage message, bool isDark) {
+  Widget _messageBubble(Map<String, dynamic> msg, bool isDark) {
     return Align(
-      alignment: message.isMe ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: msg['isMe'] ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
         decoration: BoxDecoration(
-          color: message.isMe
-              ? AppTheme.primary
-              : (isDark ? const Color(0xFF1E293B) : Colors.white),
+          color: msg['isMe'] ? AppTheme.primary : (isDark ? const Color(0xFF1E293B) : Colors.white),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
             topRight: const Radius.circular(16),
-            bottomLeft: message.isMe ? const Radius.circular(16) : const Radius.circular(4),
-            bottomRight: message.isMe ? const Radius.circular(4) : const Radius.circular(16),
+            bottomLeft: msg['isMe'] ? const Radius.circular(16) : const Radius.circular(4),
+            bottomRight: msg['isMe'] ? const Radius.circular(4) : const Radius.circular(16),
           ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                color: message.isMe ? Colors.white : (isDark ? Colors.white : Colors.black87),
-              ),
-            ),
+            Text(msg['text'], style: TextStyle(color: msg['isMe'] ? Colors.white : (isDark ? Colors.white : Colors.black87))),
             const SizedBox(height: 4),
-            Text(
-              _formatTime(message.timestamp),
-              style: TextStyle(
-                color: message.isMe ? Colors.white70 : Colors.grey[500],
-                fontSize: 10,
-              ),
-            ),
+            Text(_formatTime(msg['timestamp']), style: TextStyle(color: msg['isMe'] ? Colors.white70 : Colors.grey[500], fontSize: 10)),
           ],
         ),
       ),
@@ -486,39 +409,18 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
-          ),
-        ],
       ),
       child: Row(
         children: [
-          IconButton(
-            icon: Icon(Icons.attach_file, color: AppTheme.primary),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('File attachment coming soon')),
-              );
-            },
-          ),
+          IconButton(icon: Icon(Icons.attach_file, color: AppTheme.primary), onPressed: () {}),
           Expanded(
             child: TextField(
-              controller: _messageController,
-              onChanged: (_) => _sendTypingIndicator(),
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 14,
-                color: isDark ? Colors.white : Colors.black87,
-              ),
+              controller: _controller,
+              style: TextStyle(color: isDark ? Colors.white : Colors.black87),
               decoration: InputDecoration(
                 hintText: "Type a message...",
-                hintStyle: GoogleFonts.plusJakartaSans(color: Colors.grey[500]),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(25),
-                  borderSide: BorderSide.none,
-                ),
+                hintStyle: TextStyle(color: Colors.grey[500]),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(25), borderSide: BorderSide.none),
                 filled: true,
                 fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey[100],
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -530,47 +432,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             onTap: _sendMessage,
             child: Container(
               padding: const EdgeInsets.all(12),
-              decoration: const BoxDecoration(
-                color: AppTheme.primary,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.send, color: Colors.white, size: 20),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(bool isDark) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: AppTheme.primaryContainer.withAlpha(80),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.chat_bubble_outline_rounded, color: AppTheme.primary, size: 40),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No Messages Yet',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : AppTheme.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Send a message to ${widget.providerName}',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 14,
-              color: AppTheme.textSecondary,
+              decoration: const BoxDecoration(color: AppTheme.primary, shape: BoxShape.circle),
+              child: _isSending
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.send, color: Colors.white, size: 20),
             ),
           ),
         ],

@@ -554,6 +554,85 @@ router.post('/bookings/:id/tasks', async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+// ==================== CHAT MESSAGES ====================
+// جلب رسائل حجز معين
+router.get('/bookings/:bookingId/messages', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const clientId = req.user.userId;
+
+    const booking = await Booking.findOne({ _id: bookingId, clientId }).select('messages');
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // تطبيع الرسائل (تأكد من أنها مصفوفة)
+    const messages = Array.isArray(booking.messages) ? booking.messages : [];
+    res.json(messages);
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// إرسال رسالة جديدة (يحفظها تلقائياً في الحجز)
+router.post('/bookings/:bookingId/messages', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const clientId = req.user.userId;
+    const { message } = req.body;
+
+    if (!message || message.trim() === '') {
+      return res.status(400).json({ message: 'Message cannot be empty' });
+    }
+
+    const booking = await Booking.findOne({ _id: bookingId, clientId });
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // جلب اسم العميل (يمكن تخزينه مع الرسالة)
+    const clientUser = await User.findById(clientId).select('fullName');
+    const senderName = clientUser?.fullName || 'Client';
+
+    // إنشاء الرسالة
+    const newMessage = {
+      senderId: clientId,
+      senderName: senderName,
+      message: message.trim(),
+      timestamp: new Date(),
+      isRead: false
+    };
+
+    // إضافة الرسالة إلى مصفوفة messages
+    if (!booking.messages) booking.messages = [];
+    booking.messages.push(newMessage);
+    await booking.save();
+
+    // إعلام المزود عبر Socket.io (إذا كان متصلاً)
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`booking_${bookingId}`).emit('newBookingMessage', {
+        bookingId,
+        message: newMessage
+      });
+    }
+
+    // إشعار للمزود (اختياري)
+    await Notification.create({
+      userId: booking.providerId,
+      title: 'New Message',
+      message: `${senderName}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
+      type: 'message',
+      bookingId: booking._id
+    });
+
+    res.status(201).json({ message: 'Message sent', data: newMessage });
+  } catch (error) {
+    console.error('Error sending message:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
 
 router.post('/feedback', async (req, res) => {
   try {

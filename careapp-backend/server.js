@@ -139,6 +139,7 @@ connectDB();
 
 const Notification = require('./models/Notification');
 const Booking = require('./models/Booking');
+const User = require('./models/User'); // ✅ أضف هذا
 
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
@@ -194,6 +195,58 @@ io.on('connection', (socket) => {
         socket.join(`tracking_${bookingId}`);
       }
     } catch (err) {}
+  });
+
+  // ==================== CHAT EVENTS ====================
+  socket.on('joinBookingRoom', (bookingId) => {
+    if (bookingId) {
+      socket.join(`booking_${bookingId}`);
+      console.log(`User ${socket.userId} joined room booking_${bookingId}`);
+    }
+  });
+
+  socket.on('sendBookingMessage', async ({ bookingId, message }) => {
+    try {
+      const booking = await Booking.findById(bookingId);
+      if (!booking) return;
+
+      const isClient = booking.clientId?.toString() === socket.userId;
+      const isProvider = booking.providerId?.toString() === socket.userId;
+      if (!isClient && !isProvider) return;
+
+      const senderUser = await User.findById(socket.userId).select('fullName');
+      const senderName = senderUser?.fullName || (isClient ? 'Client' : 'Provider');
+
+      const newMessage = {
+        senderId: socket.userId,
+        senderName: senderName,
+        message: message.trim(),
+        timestamp: new Date(),
+        isRead: false
+      };
+
+      if (!booking.messages) booking.messages = [];
+      booking.messages.push(newMessage);
+      await booking.save();
+
+      io.to(`booking_${bookingId}`).emit('newBookingMessage', {
+        bookingId,
+        message: newMessage
+      });
+
+      const otherUserId = isClient ? booking.providerId : booking.clientId;
+      if (otherUserId) {
+        await Notification.create({
+          userId: otherUserId,
+          title: 'New Message',
+          message: `${senderName}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
+          type: 'message',
+          bookingId: booking._id
+        });
+      }
+    } catch (err) {
+      console.error('Error in sendBookingMessage:', err);
+    }
   });
   
   socket.on('trackingUpdate', async (data) => {

@@ -8,6 +8,7 @@ import '../../core/app_routes.dart';
 import '../../services/auth_service.dart';
 import '../../services/client_api_service.dart';
 import '../../services/theme_provider.dart';
+import 'chat_screen.dart'; // ✅ استيراد ChatScreen الموحد
 
 class ProfessionalDashboard extends StatefulWidget {
   const ProfessionalDashboard({super.key});
@@ -24,7 +25,6 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
   String? _activeBookingId;
   int _unreadNotificationsCount = 0;
 
-  // ✅ Quick Actions: فقط 4 أيقونات (بدون Book)
   final List<Map<String, dynamic>> _primaryActions = [
     {'label': 'Search', 'icon': Icons.search_rounded, 'color': const Color(0xFF6366F1), 'route': AppRoutes.clientSearch, 'description': 'Find providers'},
     {'label': 'My Bookings', 'icon': Icons.calendar_month_rounded, 'color': const Color(0xFF3B82F6), 'route': AppRoutes.clientBooking, 'description': 'View all'},
@@ -115,7 +115,10 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
       return;
     }
     if (route == AppRoutes.clientChat) {
-      Navigator.pushNamed(context, route);
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ChatSelectionScreen()),
+      );
       return;
     }
     Navigator.pushNamed(context, route, arguments: arguments);
@@ -219,8 +222,6 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
     );
   }
 
-  // ==================== HEADER ====================
-  
   Widget _buildHeader(bool isDark) {
     return SliverAppBar(
       expandedHeight: 230,
@@ -357,8 +358,6 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
     }
   }
 
-  // ==================== SECTION TITLE ====================
-  
   Widget _buildSectionTitle(String title, IconData icon, bool isDark) {
     return Row(
       children: [
@@ -376,8 +375,6 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
     );
   }
 
-  // ==================== ACTIONS GRID ====================
-  
   Widget _buildActionsGrid(List<Map<String, dynamic>> actions, bool isDark) {
     return GridView.builder(
       shrinkWrap: true,
@@ -440,8 +437,6 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
     );
   }
 
-  // ==================== BOTTOM NAVIGATION ====================
-  
   Widget _buildBottomNav(bool isDark) {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -486,6 +481,119 @@ class _ProfessionalDashboardState extends State<ProfessionalDashboard> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ==================== CHAT SELECTION SCREEN ====================
+class ChatSelectionScreen extends StatefulWidget {
+  const ChatSelectionScreen({super.key});
+
+  @override
+  State<ChatSelectionScreen> createState() => _ChatSelectionScreenState();
+}
+
+class _ChatSelectionScreenState extends State<ChatSelectionScreen> {
+  final ClientApiService _api = ClientApiService();
+  List<Map<String, dynamic>> _bookings = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBookings();
+  }
+
+  Future<void> _loadBookings() async {
+    setState(() => _isLoading = true);
+    try {
+      final bookings = await _api.getBookings();
+      final activeBookings = bookings.where((b) {
+        final status = b['status']?.toString().toLowerCase() ?? '';
+        return status == 'confirmed' || status == 'in progress';
+      }).toList();
+      setState(() {
+        _bookings = activeBookings.cast<Map<String, dynamic>>();
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load bookings: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        title: const Text('Select a Chat'),
+        backgroundColor: AppTheme.primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _bookings.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey[400]),
+                      const SizedBox(height: 16),
+                      Text('No active bookings', style: TextStyle(color: Colors.grey[500])),
+                      const SizedBox(height: 8),
+                      Text(
+                        'You can chat with providers for confirmed or in-progress services.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _bookings.length,
+                  itemBuilder: (context, index) {
+                    final booking = _bookings[index];
+                    final bookingId = booking['_id'] ?? booking['id'];
+                    final providerName = booking['provider'] ?? 'Provider';
+                    final providerId = booking['providerId']?['_id'] ?? booking['providerId'];
+                    final serviceName = booking['service'] ?? 'Service';
+                    final date = booking['date'] ?? '';
+
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: AppTheme.primary.withOpacity(0.1),
+                          child: const Icon(Icons.chat, color: AppTheme.primary),
+                        ),
+                        title: Text(providerName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text('$serviceName - $date'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                bookingId: bookingId,
+                                otherUserId: providerId ?? '',
+                                otherUserName: providerName,
+                                // socket: null, // يمكن تمرير socket إذا كان متاحاً
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  },
+                ),
     );
   }
 }

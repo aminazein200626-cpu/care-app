@@ -23,7 +23,6 @@ import 'presentation/client/tracking_screen.dart';
 import 'presentation/client/payment_screen.dart';
 import 'presentation/client/feedback_screen.dart';
 import 'presentation/client/notifications_screen.dart';
-import 'presentation/client/chat_screen.dart' as client_chat;
 import 'presentation/client/settings_screen.dart';
 import 'presentation/client/ads_screen.dart';
 import 'presentation/client/call_history_screen.dart';
@@ -35,6 +34,9 @@ import 'presentation/client/change_password_screen.dart';
 import 'presentation/client/select_dependant_screen.dart';
 import 'presentation/client/availability_screen.dart';
 import 'presentation/client/add_tasks_before_booking_screen.dart';
+
+// ✅ استيراد ChatScreen الموحد (من client أو shared)
+import 'presentation/client/chat_screen.dart';   // يجب أن يكون هذا الملف يحتوي على ChatScreen الموحّد
 
 // Provider Screens
 import 'presentation/provider/provider_dashboard.dart';
@@ -155,23 +157,28 @@ class CareApp extends StatelessWidget {
         return MaterialPageRoute(builder: (_) => const NotificationsScreen());
       case AppRoutes.clientHistory:
         return MaterialPageRoute(builder: (_) => const ServiceHistoryScreen());
+      
+      // ✅ مسار الدردشة المعدل (باستخدام ChatScreen الموحد)
       case AppRoutes.clientChat:
         if (args != null && args is Map) {
+          final bookingId = args['bookingId']?.toString() ?? '';
+          final otherUserId = args['providerId']?.toString() ?? args['otherUserId']?.toString() ?? '';
+          final otherUserName = args['providerName']?.toString() ?? args['otherUserName']?.toString() ?? 'User';
+          
           return MaterialPageRoute(
-            builder: (_) => client_chat.ChatScreen(
-              providerId: args['providerId']?.toString() ?? '',
-              providerName: args['providerName']?.toString() ?? 'Provider',
-              providerAvatar: args['providerAvatar']?.toString(),
-              bookingId: args['bookingId']?.toString(),
+            builder: (_) => ChatScreen(
+              bookingId: bookingId,
+              otherUserId: otherUserId,
+              otherUserName: otherUserName,
+              socket: null,   // يمكن تمرير socket إذا كان متاحاً من مكان آخر
             ),
           );
         }
+        // إذا لم تكن هناك وسائط، نعرض شاشة فارغة أو نوجه لاختيار الحجز
         return MaterialPageRoute(
-          builder: (_) => const client_chat.ChatScreen(
-            providerId: '',
-            providerName: 'Provider',
-          ),
+          builder: (_) => const ChatSelectionScreen(),   // يجب استيرادها أو إنشاؤها
         );
+      
       case AppRoutes.settingsScreen:
         return MaterialPageRoute(builder: (_) => const SettingsScreen());
       case AppRoutes.adsScreen:
