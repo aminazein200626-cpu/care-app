@@ -734,7 +734,7 @@ const rateProvider = async (req, res) => {
 const createBookingRequest = async (req, res) => {
   try {
     const {
-      providerId,
+      providerId,       // هذا هو ServiceProvider._id المرسل من العميل
       serviceName,
       date,
       startTime,
@@ -748,28 +748,31 @@ const createBookingRequest = async (req, res) => {
     } = req.body;
     const clientId = req.user.userId;
 
+    // ✅ تحويل providerId من ServiceProvider._id إلى User._id
+    const providerDoc = await ServiceProvider.findById(providerId).select('userid');
+    if (!providerDoc) {
+      return res.status(404).json({ message: 'Provider not found' });
+    }
+    const realProviderId = providerDoc.userid; // هذا هو User._id الحقيقي
+
     let tasksArray = [];
     if (tasks) {
       try {
         tasksArray = typeof tasks === 'string' ? JSON.parse(tasks) : tasks;
         if (!Array.isArray(tasksArray)) tasksArray = [];
       } catch (e) {
-        console.warn('Invalid tasks JSON:', tasks);
         tasksArray = [];
       }
     }
 
     let startDateTime, endDateTime;
-
     if (startTimestamp && endTimestamp) {
       startDateTime = new Date(parseInt(startTimestamp));
       endDateTime = new Date(parseInt(endTimestamp));
-    }
-    else if (date && startTime && endTime) {
+    } else if (date && startTime && endTime) {
       startDateTime = new Date(`${date}T${startTime}`);
       endDateTime = new Date(`${date}T${endTime}`);
-    }
-    else {
+    } else {
       return res.status(400).json({ message: 'Invalid date/time: missing either timestamps or date+time fields' });
     }
 
@@ -789,7 +792,7 @@ const createBookingRequest = async (req, res) => {
       end_time: endDateTime,
       status: 'pending',
       clientId,
-      providerId
+      providerId: realProviderId   // ✅ نستخدم User._id هنا
     });
     await task.save();
 
@@ -797,9 +800,7 @@ const createBookingRequest = async (req, res) => {
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
         let cleanPath = file.path.replace(/\\/g, '/');
-        if (!cleanPath.startsWith('/')) {
-          cleanPath = '/' + cleanPath;
-        }
+        if (!cleanPath.startsWith('/')) cleanPath = '/' + cleanPath;
         const fileDoc = new File({
           name: file.originalname,
           url: cleanPath,
@@ -810,12 +811,11 @@ const createBookingRequest = async (req, res) => {
         await fileDoc.save();
         uploadedFiles.push(fileDoc);
       }
-      console.log(`${uploadedFiles.length} files attached to task ${task._id}`);
     }
 
     const bookingRequest = new BookingRequest({
       clientId,
-      providerId,
+      providerId: realProviderId,   // ✅ نستخدم User._id هنا
       serviceName,
       date: startDateTime.toISOString().split('T')[0],
       startTime: startDateTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
@@ -830,7 +830,7 @@ const createBookingRequest = async (req, res) => {
     await bookingRequest.save();
 
     await Notification.create({
-      userId: providerId,
+      userId: realProviderId,   // ✅ إرسال الإشعار إلى User._id
       title: 'New Booking Request',
       message: `You have a new request for ${serviceName} on ${bookingRequest.date}`,
       type: 'booking',

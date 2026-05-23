@@ -7,18 +7,17 @@ const dependentFileSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  fileName: { type: String, required: true },       // اسم الملف الأصلي
-  fileUrl: { type: String, required: true },        // الرابط (مثال: /uploads/dependent-files/xxx.pdf)
+  fileName: { type: String, required: true },
+  fileUrl: { type: String, required: true },
   fileType: {
     type: String,
     enum: ['general', 'medical', 'id_card', 'prescription', 'test_result', 'other'],
     default: 'general'
   },
-  mimeType: { type: String, required: true },       // مثلاً application/pdf, image/jpeg
-  size: { type: Number, default: 0 },               // الحجم بالبايت
+  mimeType: { type: String, required: true },
+  size: { type: Number, default: 0 },
   uploadedAt: { type: Date, default: Date.now }
 });
-
 
 dependentFileSchema.index({ dependentId: 1, fileType: 1 });
 

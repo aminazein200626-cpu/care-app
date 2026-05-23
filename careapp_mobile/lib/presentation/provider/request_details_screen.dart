@@ -170,7 +170,6 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final dependent = widget.requestData['dependent'];
     final tasks = _safeList(widget.requestData['tasks']);
-    // Files from DependentFile collection are already inside dependent['files']
     final files = dependent != null ? _safeList(dependent['files']) : [];
     final medicalInfo = dependent != null ? dependent['medicalInfo'] : null;
     
@@ -249,8 +248,50 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
                     _infoRow(Icons.health_and_safety, "Conditions", medicalInfo['conditions']),
                 ],
                 
-                // Files from DependentFile
-                if (files.isNotEmpty) _buildFilesSection(files, isDark),
+                // ✅ Files from DependentFile (مع تحسين العرض)
+                if (files.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text("📎 Dependant Files", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: files.map((file) {
+                      String fileUrl = '';
+                      String fileName = 'File';
+                      if (file is Map) {
+                        fileUrl = file['fileUrl'] ?? file['url'] ?? '';
+                        fileName = file['fileName'] ?? file['name'] ?? 'file';
+                      } else if (file is String) {
+                        fileUrl = file;
+                        fileName = file.split('/').last;
+                      }
+                      if (fileUrl.isEmpty) return const SizedBox.shrink();
+                      return GestureDetector(
+                        onTap: () => _openFile(fileUrl),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.attach_file, size: 14, color: AppTheme.primary),
+                              const SizedBox(width: 4),
+                              Text(
+                                fileName.length > 25 ? '${fileName.substring(0, 22)}...' : fileName,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ] else
                 _infoRow(Icons.info_outline, "No dependant", "No dependant associated with this booking", isWarning: true),
             ]),
@@ -314,44 +355,6 @@ class _RequestDetailsScreenState extends State<RequestDetailsScreen> {
         ),
       ),
       bottomSheet: isPending ? _buildBottomActions(context, isDark) : null,
-    );
-  }
-
-  Widget _buildFilesSection(List files, bool isDark) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text("Attached Files:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: files.map((file) {
-              String filePath = '';
-              String fileName = 'File';
-              if (file is Map) {
-                filePath = file['url'] ?? file['path'] ?? '';
-                fileName = file['name'] ?? filePath.split('/').last;
-              } else if (file is String) {
-                filePath = file;
-                fileName = filePath.split('/').last;
-              }
-              if (filePath.isEmpty) return const SizedBox.shrink();
-              return GestureDetector(
-                onTap: () => _openFile(filePath),
-                child: Chip(
-                  label: Text(fileName.length > 30 ? '${fileName.substring(0, 27)}...' : fileName,
-                      style: const TextStyle(fontSize: 11)),
-                  avatar: const Icon(Icons.attach_file, size: 14),
-                  backgroundColor: AppTheme.primary.withOpacity(0.1),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
     );
   }
 
