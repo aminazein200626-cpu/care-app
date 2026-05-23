@@ -130,6 +130,10 @@ app.use('/api', notificationRoutes);
 const reportRoutes = require('./routes/reportRoutes');
 app.use('/api/reports', reportRoutes);
 
+// ✅ إضافة مسار التقييمات (Feedback)
+const feedbackRoutes = require('./routes/feedbackRoutes');
+app.use('/api/feedback', feedbackRoutes);
+
 const connectDB = require('./config/db');
 connectDB();
 

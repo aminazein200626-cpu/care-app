@@ -4,7 +4,8 @@ const authController = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 
-router.post('/register', authController.register);
+// ✅ إضافة upload.any() إلى مسار التسجيل للسماح باستقبال multipart/form-data مع الملفات
+router.post('/register', upload.any(), authController.register);
 router.post('/login', authController.login);
 router.post('/register-provider', upload.any(), authController.registerProvider);
 router.post('/forgot-password', authController.requestPasswordReset);

@@ -43,7 +43,6 @@ class Booking {
   });
 
   factory Booking.fromJson(Map<String, dynamic> json) {
-    // تأكد من أن json هو Map وليس أي نوع آخر
     if (json is! Map<String, dynamic>) {
       return Booking(
         id: '',
@@ -165,7 +164,6 @@ class _BookingsScreenState extends State<BookingsScreen>
       final bookingsData = await _api.getBookings();
       if (!mounted) return;
       
-      // تصفية البيانات للتأكد من أن كل عنصر هو Map
       final List<Map<String, dynamic>> safeBookings = [];
       for (var item in bookingsData) {
         if (item is Map<String, dynamic>) {
@@ -173,7 +171,6 @@ class _BookingsScreenState extends State<BookingsScreen>
         } else if (item is Map) {
           safeBookings.add(Map<String, dynamic>.from(item));
         }
-        // تجاهل أي عنصر ليس Map (مثل String)
       }
       
       setState(() {
@@ -181,7 +178,6 @@ class _BookingsScreenState extends State<BookingsScreen>
         _isLoading = false;
       });
       
-      // Debug: print remaining amounts
       print('=== Bookings loaded ===');
       for (var b in _bookings) {
         print('Booking ${b.id}: status=${b.status}, remainingAmount=${b.remainingAmount}');
@@ -204,10 +200,7 @@ class _BookingsScreenState extends State<BookingsScreen>
           builder: (_) => PaymentScreen(initialBookingId: booking.id),
         ),
       );
-      // Reload data after returning from payment screen
       await _loadBookings();
-      // Force UI rebuild (even though setState is already in _loadBookings)
-      setState(() {});
       setState(() => _isProcessing = false);
     } else {
       setState(() => _isProcessing = false);
@@ -231,37 +224,62 @@ class _BookingsScreenState extends State<BookingsScreen>
     }
   }
 
-  void _showRatingDialog(Booking booking) {
-    int rating = 0;
+  // ✅ نافذة تقييم جديدة باستخدام Feedback API الجديد
+  void _showFeedbackDialog(Booking booking) {
+    int overallRating = 0;
+    int punctualityRating = 0;
     String comment = '';
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text("Rate the Provider"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text("How was your experience?"),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(5, (i) => IconButton(
-                  icon: Icon(i < rating ? Icons.star : Icons.star_border, color: Colors.amber, size: 32),
-                  onPressed: () => setDialogState(() => rating = i + 1),
-                )),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  hintText: "Leave a comment...",
-                  border: OutlineInputBorder(),
+          title: const Text("Rate Your Experience"),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text("How was your overall experience?"),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (i) => IconButton(
+                    icon: Icon(
+                      i < overallRating ? Icons.star : Icons.star_border,
+                      color: Colors.amber,
+                      size: 32,
+                    ),
+                    onPressed: () => setDialogState(() => overallRating = i + 1),
+                  )),
                 ),
-                onChanged: (val) => comment = val,
-              ),
-            ],
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 8),
+                const Text("Punctuality (optional)"),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (i) => IconButton(
+                    icon: Icon(
+                      i < punctualityRating ? Icons.access_time : Icons.access_time_outlined,
+                      color: i < punctualityRating ? Colors.green : Colors.grey,
+                      size: 28,
+                    ),
+                    onPressed: () => setDialogState(() => punctualityRating = i + 1),
+                  )),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: "Leave a comment...",
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (val) => comment = val,
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -270,8 +288,17 @@ class _BookingsScreenState extends State<BookingsScreen>
             ),
             ElevatedButton(
               onPressed: () async {
+                if (overallRating == 0) {
+                  _showSnackBar('Please provide an overall rating', Colors.red);
+                  return;
+                }
                 Navigator.pop(ctx);
-                await _submitRating(booking.id, rating, comment);
+                await _submitFeedback(
+                  booking.id,
+                  overallRating,
+                  punctualityRating > 0 ? punctualityRating : null,
+                  comment,
+                );
               },
               child: const Text("Submit"),
             ),
@@ -281,15 +308,20 @@ class _BookingsScreenState extends State<BookingsScreen>
     );
   }
 
-  Future<void> _submitRating(String bookingId, int rating, String comment) async {
+  Future<void> _submitFeedback(String bookingId, int overallRating, int? punctuality, String comment) async {
     setState(() => _isProcessing = true);
     try {
-      final result = await _api.rateProvider(bookingId, rating, comment);
+      final result = await _api.sendFeedback(
+        bookingId: bookingId,
+        overallRating: overallRating,
+        punctuality: punctuality,
+        comment: comment,
+      );
       if (result['success'] == true) {
         _showSnackBar('Thank you for your feedback!', Colors.green);
         await _loadBookings();
       } else {
-        _showSnackBar(result['message'] ?? 'Failed to submit rating', Colors.red);
+        _showSnackBar(result['message'] ?? 'Failed to submit feedback', Colors.red);
       }
     } catch (e) {
       _showSnackBar('Error: $e', Colors.red);
@@ -617,6 +649,7 @@ class _BookingsScreenState extends State<BookingsScreen>
     final bool needsRemainingPayment = (booking.status == BookingStatus.completed && booking.remainingAmount > 0);
     final bool showTrackButton = (booking.status == BookingStatus.confirmed) ||
                                  (booking.status == BookingStatus.completed && booking.remainingAmount > 0);
+    final bool canRate = (booking.status == BookingStatus.completed);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -728,6 +761,25 @@ class _BookingsScreenState extends State<BookingsScreen>
                 ),
               ),
             ],
+            
+            if (canRate)
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _showFeedbackDialog(booking),
+                    icon: const Icon(Icons.star_outline, size: 18),
+                    label: Text('Rate Provider', style: GoogleFonts.plusJakartaSans(fontSize: 13, fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.amber,
+                      side: const BorderSide(color: Colors.amber),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+              ),
             
             if (booking.status != BookingStatus.cancelled) ...[
               const SizedBox(height: 14),

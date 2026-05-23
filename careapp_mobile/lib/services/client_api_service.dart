@@ -716,4 +716,60 @@ class ClientApiService {
     final error = jsonDecode(responseBody);
     throw Exception(error['message'] ?? 'Failed to create booking request with files');
   }
+
+  // ==================== FEEDBACK (NEW) ====================
+  
+  /// إرسال تقييم جديد (العميل يقيم المزود)
+  Future<Map<String, dynamic>> sendFeedback({
+    required String bookingId,
+    required int overallRating,
+    int? punctuality,
+    String comment = '',
+  }) async {
+    final body = {
+      'bookingId': bookingId,
+      'overall_rating': overallRating,
+      'comment': comment,
+    };
+    if (punctuality != null) {
+      body['punctuality'] = punctuality;
+    }
+    final response = await _post('/api/feedback', body);
+    if (response.statusCode == 201) {
+      return jsonDecode(response.body);
+    } else {
+      final error = jsonDecode(response.body);
+      throw Exception(error['message'] ?? 'Failed to submit feedback');
+    }
+  }
+
+  /// الحصول على قائمة التقييمات التي كتبها المستخدم الحالي
+  Future<List<Map<String, dynamic>>> getMyFeedbacks({int page = 1, int limit = 10}) async {
+    final response = await _get('/api/feedback/my-feedbacks?page=$page&limit=$limit');
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<Map<String, dynamic>>.from(data['data'] ?? []);
+    }
+    return [];
+  }
+
+  /// الحصول على قائمة التقييمات التي استلمها مزود معين (للعرض العام)
+  Future<Map<String, dynamic>> getProviderFeedbacks(String providerId, {int page = 1, int limit = 10}) async {
+    final response = await _get('/api/feedback/provider/$providerId?page=$page&limit=$limit');
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    throw Exception('Failed to load provider feedbacks');
+  }
+
+  /// رد المزود على تقييم (هذه الدالة للمزود وليس للعميل)
+  /// ولكن يمكن إضافتها هنا إذا كان نفس الـ ApiService يستخدم من قبل المزود أيضاً
+  /// أو يمكن وضعها في ProviderApiService منفصل
+  Future<Map<String, dynamic>> replyToFeedback(String feedbackId, String reply) async {
+    final response = await _put('/api/feedback/$feedbackId/reply', {'reply': reply});
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    throw Exception('Failed to reply to feedback');
+  }
 }

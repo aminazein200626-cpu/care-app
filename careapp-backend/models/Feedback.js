@@ -1,7 +1,29 @@
 const mongoose = require('mongoose');
 
 const feedbackSchema = new mongoose.Schema({
-  // التقييم الأساسي (1-5)
+  // معرف العميل (من جدول User)
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  
+  // معرف المزود (من جدول User)
+  providerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  
+  // معرف الحجز (Booking) – إجباري وفريد لمنع تكرار التقييم
+  bookingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Booking',
+    required: true,
+    unique: true
+  },
+  
+  // التقييم العام (1-5)
   overall_rating: {
     type: Number,
     required: true,
@@ -9,7 +31,7 @@ const feedbackSchema = new mongoose.Schema({
     max: 5
   },
   
-  // التقييم الإضافي (اختياري)
+  // الالتزام بالمواعيد (1-5) – اختياري
   punctuality: {
     type: Number,
     min: 1,
@@ -35,38 +57,16 @@ const feedbackSchema = new mongoose.Schema({
     default: null
   },
   
-  // معرف العميل (من جدول User)
-  clientId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  
-  // معرف المزود (من جدول User)
-  providerId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  
-  // معرف الحجز (Booking) – يجب أن يكون فريداً لمنع تكرار التقييم
-  bookingId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Booking',
-    required: true,
-    unique: true   // ✅ يولد فهرساً فريداً تلقائياً
-  },
-  
   // تاريخ إنشاء التقييم
-  createdAt: {
+  created_at: {
     type: Date,
     default: Date.now
   }
 });
 
-// ✅ إضافة فهارس إضافية (لتحسين الأداء) – لا تعيد فهرسة bookingId
-feedbackSchema.index({ clientId: 1 });
-feedbackSchema.index({ providerId: 1 });
-feedbackSchema.index({ createdAt: -1 });
+// فهارس لتحسين الأداء
+feedbackSchema.index({ clientId: 1, created_at: -1 });
+feedbackSchema.index({ providerId: 1, created_at: -1 });
+feedbackSchema.index({ bookingId: 1 }, { unique: true }); // منع تكرار التقييم لنفس الحجز
 
 module.exports = mongoose.model('Feedback', feedbackSchema);

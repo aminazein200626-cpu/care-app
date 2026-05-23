@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:url_launcher/url_launcher.dart'; // ✅ إضافة لفتح الملفات
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/api_config.dart';
 import '../../core/app_theme.dart';
 
@@ -29,7 +29,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   IO.Socket? _socket;
   bool _isConnected = false;
 
-  // ✅ معلومات المعال والملفات
+  // معلومات المعال والملفات
   Map<String, dynamic>? _dependent;
   List<Map<String, dynamic>> _dependentFiles = [];
   List<Map<String, dynamic>> _taskFiles = [];
@@ -174,7 +174,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
           _data = data;
           _workSteps = List<Map<String, dynamic>>.from(data['workSteps'] ?? []);
           _attachments = List<Map<String, dynamic>>.from(data['attachments'] ?? []);
-          // ✅ استخراج معلومات المعال
           if (data['dependent'] != null) {
             _dependent = Map<String, dynamic>.from(data['dependent']);
             _dependentFiles = List<Map<String, dynamic>>.from(_dependent?['files'] ?? []);
@@ -183,7 +182,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
           _updateStagesFromStatus(stage);
           _isLoading = false;
         });
-        // ✅ جلب ملفات المهمة إذا وجد taskId
         if (data['taskId'] != null) {
           await _fetchTaskFiles(data['taskId'].toString());
         }
@@ -697,7 +695,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
           ),
           const SizedBox(height: 16),
 
-          // ✅ Dependant Information
+          // Dependant Information
           if (_dependent != null) ...[
             Container(
               padding: const EdgeInsets.all(16),
@@ -733,7 +731,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
             const SizedBox(height: 16),
           ],
 
-          // ✅ Task Files (رفعها العميل عند إنشاء الطلب)
+          // Task Files (رفعها العميل عند إنشاء الطلب)
           if (_taskFiles.isNotEmpty) ...[
             Container(
               padding: const EdgeInsets.all(16),
