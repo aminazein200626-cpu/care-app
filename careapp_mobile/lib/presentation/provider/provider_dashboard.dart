@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:http/http.dart' as http;
@@ -6,12 +7,12 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/app_theme.dart';
 import '../../core/api_config.dart';
+import '../../services/theme_provider.dart';
 import 'consult_requests_screen.dart';
 import 'profile_page.dart';
 import 'calendar_page.dart';
 import 'communication_screen.dart';
 import 'settings_page.dart';
-
 import 'payment_page.dart';
 import 'ads_management_page.dart';
 import 'notifications_page.dart';
@@ -151,13 +152,18 @@ class _ProviderDashboardState extends State<ProviderDashboard> {
     }
   }
 
+  void _toggleTheme() {
+    final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+    themeProvider.toggleTheme();
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     final List<Widget> pages = [
       _buildHomeContent(isDark),
-      const ConsultRequestsScreen(),
+      const BookingRequestsScreen(),
       const CommunicationScreen(),
       const ProfilePage(),
       const SettingsPage(),
@@ -322,9 +328,7 @@ class _ProviderDashboardState extends State<ProviderDashboard> {
                     color: Colors.white,
                     size: 22,
                   ),
-                  onPressed: () {
-                    // TODO: Implement theme toggle
-                  },
+                  onPressed: _toggleTheme,
                 ),
               ),
               const SizedBox(width: 8),
@@ -471,14 +475,14 @@ class _ProviderDashboardState extends State<ProviderDashboard> {
     );
   }
 
+  // ✅ قائمة الأدوات بعد الإزالة والإعادة التنظيم
   Widget _buildQuickToolsGrid(bool isDark) {
     final tools = [
-      {'title': 'Requests', 'icon': Icons.pending_actions_rounded, 'color': Colors.orange, 'route': 1},
-      {'title': 'Booking Req', 'icon': Icons.pending_actions_rounded, 'color': Colors.deepOrange, 'route': () => const BookingRequestsScreen()},
+      {'title': 'Booking Requests', 'icon': Icons.pending_actions_rounded, 'color': Colors.deepOrange, 'route': () => const BookingRequestsScreen()},
       {'title': 'Messages', 'icon': Icons.chat_bubble_rounded, 'color': Colors.blue, 'route': 2},
       {'title': 'Profile', 'icon': Icons.person_rounded, 'color': Colors.indigo, 'route': 3},
       {'title': 'Calendar', 'icon': Icons.calendar_month_rounded, 'color': Colors.purple, 'route': () => const CalendarPage()},
-     {'title': 'Tracking', 'icon': Icons.map_rounded, 'color': Colors.teal, 'route': () => const ActiveBookingsScreen()},
+      {'title': 'Tracking', 'icon': Icons.map_rounded, 'color': Colors.teal, 'route': () => const ActiveBookingsScreen()},
       {'title': 'Payment', 'icon': Icons.wallet_rounded, 'color': Colors.green, 'route': () => const PaymentPage()},
       {'title': 'My Ads', 'icon': Icons.campaign_rounded, 'color': Colors.pink, 'route': () => const AdsManagementPage()},
       {'title': 'Feedback', 'icon': Icons.rate_review_rounded, 'color': Colors.amber, 'route': () => const FeedbackRatingPage()},
@@ -647,7 +651,7 @@ class _ProviderDashboardState extends State<ProviderDashboard> {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           _navItem(0, Icons.home_rounded, "Home", isDark),
-          _navItem(1, Icons.assignment_rounded, "Tasks", isDark),
+          _navItem(1, Icons.assignment_rounded, "Requests", isDark),
           _navItem(2, Icons.chat_bubble_rounded, "Inbox", isDark),
           _navItem(3, Icons.person_rounded, "Me", isDark),
           _navItem(4, Icons.settings_rounded, "Set", isDark),

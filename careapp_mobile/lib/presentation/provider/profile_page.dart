@@ -1,8 +1,11 @@
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../core/app_theme.dart';
 import '../../core/api_config.dart';
 import 'service_history_page.dart';
@@ -19,7 +22,11 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   bool _isActive = true;
   bool _isLoading = true;
-  bool _isLoadingServices = false; // ✅ إضافة حالة تحميل منفصلة للخدمات
+  bool _isLoadingServices = false;
+  bool _isUploadingImage = false;
+  String? _profileImage;
+  
+  final ImagePicker _picker = ImagePicker();
 
   Map<String, dynamic> _providerData = {
     'name': '',
@@ -45,6 +52,38 @@ class _ProfilePageState extends State<ProfilePage> {
 
   final String baseUrl = ApiConfig.baseUrl;
 
+  // ==================== دوال مساعدة آمنة ====================
+  String _safeString(dynamic value, {String defaultValue = ''}) {
+    if (value == null) return defaultValue;
+    if (value is String) return value;
+    if (value is Map) {
+      if (value.containsKey('fullName')) return value['fullName'].toString();
+      if (value.containsKey('name')) return value['name'].toString();
+      return defaultValue;
+    }
+    return value.toString();
+  }
+
+  double _safeDouble(dynamic value, {double defaultValue = 0.0}) {
+    if (value == null) return defaultValue;
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? defaultValue;
+    return defaultValue;
+  }
+
+  int _safeInt(dynamic value, {int defaultValue = 0}) {
+    if (value == null) return defaultValue;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? defaultValue;
+    return defaultValue;
+  }
+
+  List<dynamic> _safeList(dynamic data) {
+    if (data is List) return data;
+    return [];
+  }
+
   @override
   void initState() {
     super.initState();
@@ -52,15 +91,10 @@ class _ProfilePageState extends State<ProfilePage> {
     _fetchServices();
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
+  // ==================== جلب البيانات ====================
   Future<void> _fetchProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
-
     if (token == null) {
       if (mounted) setState(() => _isLoading = false);
       return;
@@ -80,26 +114,28 @@ class _ProfilePageState extends State<ProfilePage> {
         if (mounted) {
           setState(() {
             _providerData = {
-              'name': data['fullName'] ?? '',
-              'email': data['email'] ?? '',
-              'phone': data['phoneNumber'] ?? '',
-              'location': '${data['wilaya'] ?? ''}, ${data['address'] ?? ''}',
-              'bio': providerDetails['bio'] ?? '',
-              'hourlyRate': providerDetails['hourlyRate'] ?? 0,
-              'rating': providerDetails['averageRating'] ?? 0,
-              'totalServices': providerDetails['totalServices'] ?? 0,
-              'completionRate': providerDetails['completionRate'] ?? 0,
-              'responseTime': providerDetails['responseTime'] ?? '5 min',
-              'certificates': providerDetails['certificates'] ?? [],
-              'services': _providerData['services'], // احتفظ بالخدمات الحالية مؤقتاً
-              'ccp': providerDetails['ccp'] ?? '',
+              'name': _safeString(data['fullName']),
+              'email': _safeString(data['email']),
+              'phone': _safeString(data['phoneNumber']),
+              'location': '${_safeString(data['wilaya'])}, ${_safeString(data['address'])}',
+              'bio': _safeString(providerDetails['bio']),
+              'hourlyRate': _safeDouble(providerDetails['hourlyRate']),
+              'rating': _safeDouble(providerDetails['averageRating']),
+              'totalServices': _safeInt(providerDetails['totalServices']),
+              'completionRate': _safeInt(providerDetails['completionRate']),
+              'responseTime': _safeString(providerDetails['responseTime'], defaultValue: '5 min'),
+              'certificates': _safeList(providerDetails['certificates']),
+              'services': _providerData['services'],
+              'ccp': _safeString(providerDetails['ccp']),
               'bankAccount': {
-                'bankName': bankAccount['bankName'] ?? '',
-                'accountNumber': bankAccount['accountNumber'] ?? '',
-                'accountHolder': bankAccount['accountHolder'] ?? '',
-                'rib': bankAccount['rib'] ?? '',
+                'bankName': _safeString(bankAccount['bankName']),
+                'accountNumber': _safeString(bankAccount['accountNumber']),
+                'accountHolder': _safeString(bankAccount['accountHolder']),
+                'rib': _safeString(bankAccount['rib']),
               },
             };
+            _profileImage = data['profilePicture'];
+            _isActive = data['isActive'] ?? true;
             _isLoading = false;
           });
         }
@@ -113,12 +149,9 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _fetchServices() async {
-    // ✅ استخدام endpoint خاص بالمزود بدلاً من admin
     setState(() => _isLoadingServices = true);
-    
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
-
     if (token == null) {
       if (mounted) setState(() => _isLoadingServices = false);
       return;
@@ -126,7 +159,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/api/provider/services'), // ✅ تغيير المسار
+        Uri.parse('$baseUrl/api/provider/services'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -135,15 +168,14 @@ class _ProfilePageState extends State<ProfilePage> {
         if (mounted) {
           setState(() {
             _providerData['services'] = data.map((s) => {
-              'name': s['name'],
-              'price': s['price'],
+              'name': _safeString(s['name']),
+              'price': _safeDouble(s['price']),
               'active': s['isActive'] ?? true,
             }).toList();
             _isLoadingServices = false;
           });
         }
       } else {
-        // في حالة فشل الجلب، نضع قائمة فارغة ولا نعطل التطبيق
         if (mounted) {
           setState(() {
             _providerData['services'] = [];
@@ -162,6 +194,95 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  // ==================== رفع صورة البروفايل ====================
+  Future<void> _requestPermissions() async {
+    final statusPhotos = await Permission.photos.status;
+    final statusCamera = await Permission.camera.status;
+    if (!statusPhotos.isGranted || !statusCamera.isGranted) {
+      await [Permission.photos, Permission.camera].request();
+    }
+  }
+
+  Future<void> _updateProfileImage() async {
+    await _requestPermissions();
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: AppTheme.primary),
+              title: const Text('Take a photo'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _pickImage(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: AppTheme.primary),
+              title: const Text('Choose from gallery'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _pickImage(ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final pickedFile = await _picker.pickImage(source: source, imageQuality: 80);
+    if (pickedFile == null) return;
+
+    setState(() => _isUploadingImage = true);
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null) {
+      setState(() => _isUploadingImage = false);
+      _showError('No authentication token');
+      return;
+    }
+
+    var request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/api/provider/profile/picture'),
+    );
+    request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(await http.MultipartFile.fromPath('profilePicture', pickedFile.path));
+
+    try {
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+      final data = jsonDecode(responseBody);
+      if (response.statusCode == 200) {
+        setState(() {
+          _profileImage = data['profilePicture'];
+          _isUploadingImage = false;
+        });
+        _showSuccess('Profile picture updated!');
+      } else {
+        setState(() => _isUploadingImage = false);
+        _showError(data['message'] ?? 'Failed to upload');
+      }
+    } catch (e) {
+      setState(() => _isUploadingImage = false);
+      _showError('Upload error: $e');
+    }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  }
+
+  void _showSuccess(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.green));
+  }
+
+  // ==================== واجهة المستخدم ====================
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -187,10 +308,7 @@ class _ProfilePageState extends State<ProfilePage> {
             );
           },
         ),
-        title: Text(
-          "My Profile",
-          style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold, color: Colors.white),
-        ),
+        title: Text("My Profile", style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: AppTheme.primary,
         centerTitle: true,
         elevation: 0,
@@ -198,34 +316,44 @@ class _ProfilePageState extends State<ProfilePage> {
           IconButton(
             icon: const Icon(Icons.edit, color: Colors.white),
             onPressed: () async {
-              await Navigator.push(
+              final result = await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const EditProfilePage()),
               );
-              _fetchProfile();
-              _fetchServices();
+              if (result == true) {
+                _fetchProfile();
+                _fetchServices();
+              }
             },
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            _buildHeader(isDark),
-            const SizedBox(height: 24),
-            _buildStatsGrid(isDark),
-            const SizedBox(height: 24),
-            _buildProfessionalInfo(isDark),
-            const SizedBox(height: 24),
-            _buildPaymentInfo(isDark),
-            const SizedBox(height: 24),
-            _buildServicesSection(isDark),
-            const SizedBox(height: 24),
-            _buildCertificatesSection(isDark),
-            const SizedBox(height: 24),
-            _buildActionsSection(isDark),
-          ],
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await _fetchProfile();
+          await _fetchServices();
+        },
+        color: AppTheme.primary,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              _buildHeader(isDark),
+              const SizedBox(height: 24),
+              _buildStatsGrid(isDark),
+              const SizedBox(height: 24),
+              _buildProfessionalInfo(isDark),
+              const SizedBox(height: 24),
+              _buildPaymentInfo(isDark),
+              const SizedBox(height: 24),
+              _buildServicesSection(isDark),
+              const SizedBox(height: 24),
+              _buildCertificatesSection(isDark),
+              const SizedBox(height: 24),
+              _buildActionsSection(isDark),
+            ],
+          ),
         ),
       ),
     );
@@ -245,19 +373,47 @@ class _ProfilePageState extends State<ProfilePage> {
               CircleAvatar(
                 radius: 45,
                 backgroundColor: AppTheme.primary.withOpacity(0.1),
-                child: Icon(Icons.person, color: AppTheme.primary, size: 50),
+                child: _isUploadingImage
+                    ? const CircularProgressIndicator()
+                    : (_profileImage != null && _profileImage!.isNotEmpty
+                        ? ClipOval(
+                            child: Image.network(
+                              _profileImage!,
+                              width: 90,
+                              height: 90,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Icon(Icons.person, size: 50, color: AppTheme.primary),
+                            ),
+                          )
+                        : Icon(Icons.person, color: AppTheme.primary, size: 50)),
               ),
               Positioned(
                 bottom: 0,
                 right: 0,
+                child: GestureDetector(
+                  onTap: _updateProfileImage,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: 0,
+                left: 0,
                 child: Container(
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
                     color: _isActive ? Colors.green : Colors.grey,
                     shape: BoxShape.circle,
-                    border: Border.all(color: isDark ? const Color(0xFF1E293B) : Colors.white, width: 2),
+                    border: Border.all(color: Colors.white, width: 2),
                   ),
-                  child: const Icon(Icons.check, color: Colors.white, size: 12),
+                  child: Icon(Icons.check, color: Colors.white, size: 12),
                 ),
               ),
             ],
@@ -269,33 +425,20 @@ class _ProfilePageState extends State<ProfilePage> {
               children: [
                 Text(
                   _providerData['name'],
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : Colors.black87,
-                  ),
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  _providerData['email'],
-                  style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                ),
+                Text(_providerData['email'], style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                 const SizedBox(height: 4),
                 Row(
                   children: [
                     Icon(Icons.star, color: Colors.amber, size: 14),
                     const SizedBox(width: 4),
-                    Text(
-                      _providerData['rating'].toString(),
-                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                    ),
+                    Text(_providerData['rating'].toStringAsFixed(1), style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                     const SizedBox(width: 12),
                     Icon(Icons.attach_money, color: AppTheme.primary, size: 14),
                     const SizedBox(width: 4),
-                    Text(
-                      "${_providerData['hourlyRate']} DZD/h",
-                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                    ),
+                    Text("${_providerData['hourlyRate'].toInt()} DZD/h", style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                   ],
                 ),
               ],
@@ -330,14 +473,7 @@ class _ProfilePageState extends State<ProfilePage> {
           children: [
             Icon(icon, color: color, size: 24),
             const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.white : Colors.black87,
-              ),
-            ),
+            Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87)),
             Text(label, style: TextStyle(color: Colors.grey[500], fontSize: 10)),
           ],
         ),
@@ -355,14 +491,7 @@ class _ProfilePageState extends State<ProfilePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Professional Info",
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
-          ),
+          Text("Professional Info", style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87)),
           const Divider(height: 24),
           _infoRow(Icons.description, "Bio", _providerData['bio'], isDark),
           const SizedBox(height: 16),
@@ -393,14 +522,7 @@ class _ProfilePageState extends State<ProfilePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Payment Information",
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
-          ),
+          Text("Payment Information", style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87)),
           const Divider(height: 24),
           if (ccp.isNotEmpty) _infoRow(Icons.credit_card, "CCP", ccp, isDark),
           if (bankAccount['bankName'].isNotEmpty) _infoRow(Icons.account_balance, "Bank Name", bankAccount['bankName'], isDark),
@@ -424,7 +546,7 @@ class _ProfilePageState extends State<ProfilePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label, style: TextStyle(color: Colors.grey[500], fontSize: 11)),
-                Text(value, style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14)),
+                Text(value.isEmpty ? '—' : value, style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14)),
               ],
             ),
           ),
@@ -435,7 +557,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Widget _buildServicesSection(bool isDark) {
     final services = _providerData['services'] as List;
-    
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -448,54 +569,27 @@ class _ProfilePageState extends State<ProfilePage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                "My Services",
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: isDark ? Colors.white : Colors.black87,
-                ),
-              ),
+              Text("My Services", style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87)),
               if (_isLoadingServices)
-                const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
+                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
               else
-                TextButton(
-                  onPressed: _fetchServices,
-                  child: const Text("Refresh", style: TextStyle(color: AppTheme.primary)),
-                ),
+                TextButton(onPressed: _fetchServices, child: const Text("Refresh", style: TextStyle(color: AppTheme.primary))),
             ],
           ),
           const Divider(height: 24),
           if (_isLoadingServices)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Center(child: CircularProgressIndicator()),
-            )
+            const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Center(child: CircularProgressIndicator()))
           else if (services.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Center(child: Text("No services found")),
-            )
+            const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Center(child: Text("No services found")))
           else
             ...services.map<Widget>((service) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Row(
                 children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: service['active'] ? Colors.green : Colors.grey,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
+                  Container(width: 8, height: 8, decoration: BoxDecoration(color: service['active'] ? Colors.green : Colors.grey, shape: BoxShape.circle)),
                   const SizedBox(width: 12),
                   Expanded(child: Text(service['name'], style: TextStyle(color: isDark ? Colors.white : Colors.black87))),
-                  Text("${service['price']} DZD", style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold)),
+                  Text("${(service['price'] as double).toInt()} DZD", style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold)),
                 ],
               ),
             )),
@@ -506,7 +600,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Widget _buildCertificatesSection(bool isDark) {
     final certificates = _providerData['certificates'] as List;
-    
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -516,36 +609,23 @@ class _ProfilePageState extends State<ProfilePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Certificates",
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
-          ),
+          Text("Certificates", style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87)),
           const Divider(height: 24),
           if (certificates.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Center(child: Text("No certificates found")),
-            )
+            const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Center(child: Text("No certificates found")))
           else
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: certificates.map<Widget>((cert) => Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                ),
+                decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.verified, color: AppTheme.primary, size: 14),
                     const SizedBox(width: 4),
-                    Text(cert, style: TextStyle(color: AppTheme.primary, fontSize: 12)),
+                    Text(cert.toString(), style: TextStyle(color: AppTheme.primary, fontSize: 12)),
                   ],
                 ),
               )).toList(),
@@ -569,10 +649,7 @@ class _ProfilePageState extends State<ProfilePage> {
             label: "Service History",
             color: Colors.blue,
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ServiceHistoryPage()),
-              );
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const ServiceHistoryPage()));
             },
             isDark: isDark,
           ),
@@ -583,6 +660,7 @@ class _ProfilePageState extends State<ProfilePage> {
             color: _isActive ? Colors.red : Colors.green,
             onTap: () {
               setState(() => _isActive = !_isActive);
+              // يمكن إضافة API call لتحديث الحالة هنا
             },
             isDark: isDark,
           ),
@@ -612,13 +690,7 @@ class _ProfilePageState extends State<ProfilePage> {
             Icon(icon, color: color, size: 20),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontWeight: FontWeight.w500,
-                  color: isDark ? Colors.white : Colors.black87,
-                ),
-              ),
+              child: Text(label, style: TextStyle(fontWeight: FontWeight.w500, color: isDark ? Colors.white : Colors.black87)),
             ),
             Icon(Icons.arrow_forward_ios, color: Colors.grey[400], size: 14),
           ],
