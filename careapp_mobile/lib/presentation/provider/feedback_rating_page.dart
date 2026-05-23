@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/app_theme.dart';
-
+import '../../core/api_config.dart';
 import 'provider_dashboard.dart';
 
 class FeedbackRatingPage extends StatefulWidget {
@@ -16,38 +16,47 @@ class FeedbackRatingPage extends StatefulWidget {
 
 class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
   int _selectedTab = 0;
-
   List<Map<String, dynamic>> _reviews = [];
   List<Map<String, dynamic>> _complaints = [];
   bool _isLoading = true;
-
-  final String baseUrl = 'http://10.0.2.2:5001';
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _fetchReviews();
-    _fetchComplaints();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    await Future.wait([
+      _fetchReviews(),
+      _fetchComplaints(),
+    ]);
+    if (mounted) setState(() => _isLoading = false);
   }
 
   Future<void> _fetchReviews() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
     if (token == null) {
-      setState(() => _isLoading = false);
+      setState(() => _error = 'Not authenticated');
       return;
     }
 
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/api/provider/reviews'),
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/reviews'),
         headers: {'Authorization': 'Bearer $token'},
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final List data = jsonDecode(response.body);
         setState(() {
-          _reviews = data.map((item) => ({
+          _reviews = data.map((item) => {
             'id': item['id'],
             'client': item['client'],
             'rating': item['rating'],
@@ -56,14 +65,14 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
             'service': item['service'],
             'replied': item['replied'] ?? false,
             'reply': item['reply'] ?? '',
-          })).toList();
-          _isLoading = false;
+          }).toList();
         });
       } else {
-        setState(() => _isLoading = false);
+        setState(() => _error = 'Failed to load reviews: ${response.statusCode}');
       }
-    } catch (error) {
-      setState(() => _isLoading = false);
+    } catch (e) {
+      setState(() => _error = 'Connection error: $e');
+      debugPrint('Error fetching reviews: $e');
     }
   }
 
@@ -74,14 +83,14 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
 
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/api/provider/complaints'),
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/complaints'),
         headers: {'Authorization': 'Bearer $token'},
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final List data = jsonDecode(response.body);
         setState(() {
-          _complaints = data.map((item) => ({
+          _complaints = data.map((item) => {
             'id': item['id'],
             'client': item['client'],
             'subject': item['subject'],
@@ -89,11 +98,11 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
             'date': item['date'],
             'status': item['status'],
             'response': item['response'] ?? '',
-          })).toList();
+          }).toList();
         });
       }
-    } catch (error) {
-      print('Error: $error');
+    } catch (e) {
+      debugPrint('Error fetching complaints: $e');
     }
   }
 
@@ -104,13 +113,13 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/provider/reviews/$reviewId/reply'),
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/reviews/$reviewId/reply'),
         headers: {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
         body: jsonEncode({'reply': reply}),
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         await _fetchReviews();
@@ -119,9 +128,20 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
             const SnackBar(content: Text("Reply submitted successfully"), backgroundColor: Colors.green),
           );
         }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Failed to submit reply"), backgroundColor: Colors.red),
+          );
+        }
       }
-    } catch (error) {
-      print('Error: $error');
+    } catch (e) {
+      debugPrint('Error submitting reply: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -132,7 +152,7 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/api/provider/complaints'),
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/complaints'),
         headers: {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
@@ -141,7 +161,7 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
           'subject': subject,
           'description': description,
         }),
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 201) {
         await _fetchComplaints();
@@ -150,9 +170,20 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
             const SnackBar(content: Text("Complaint submitted"), backgroundColor: Colors.green),
           );
         }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Failed to submit complaint"), backgroundColor: Colors.red),
+          );
+        }
       }
-    } catch (error) {
-      print('Error: $error');
+    } catch (e) {
+      debugPrint('Error submitting complaint: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -170,7 +201,7 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
   }
 
   void _showReplyDialog(int reviewId, String clientName) {
-    TextEditingController controller = TextEditingController();
+    final controller = TextEditingController();
 
     showDialog(
       context: context,
@@ -203,8 +234,8 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
   }
 
   void _showNewComplaintDialog() {
-    TextEditingController subjectController = TextEditingController();
-    TextEditingController descriptionController = TextEditingController();
+    final subjectController = TextEditingController();
+    final descriptionController = TextEditingController();
 
     showDialog(
       context: context,
@@ -262,6 +293,27 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
       );
     }
 
+    if (_error != null) {
+      return Scaffold(
+        backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _loadData,
+                child: const Text("Retry"),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -271,7 +323,7 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
-                builder: (context) => const ProviderDashboard(providerName: "Amina"),
+                builder: (context) => const ProviderDashboard(providerName: "Provider"),
               ),
             );
           },
@@ -517,6 +569,25 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
   }
 
   Widget _buildComplaintsTab(bool isDark) {
+    if (_complaints.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.report_problem_outlined, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text("No complaints", style: TextStyle(color: Colors.grey[500])),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _showNewComplaintDialog,
+              icon: const Icon(Icons.add),
+              label: const Text("File a Complaint"),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Column(
       children: [
         Padding(
@@ -524,7 +595,7 @@ class _FeedbackRatingPageState extends State<FeedbackRatingPage> {
           child: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: () => _showNewComplaintDialog(),
+              onPressed: _showNewComplaintDialog,
               icon: const Icon(Icons.add, color: Colors.white),
               label: const Text("File a Complaint"),
               style: ElevatedButton.styleFrom(

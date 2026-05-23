@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
+const reportController = require('../controllers/reportController');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 
 router.use(authMiddleware);
@@ -17,8 +18,7 @@ router.put('/requests/:id/verify', adminController.verifyProvider);
 router.put('/providers/:id/documents', adminController.updateProviderDocuments);
 
 // Reports
-router.get('/reports', adminController.getReports);
-router.put('/reports/:id/resolve', adminController.resolveReport);
+router.get('/reports', reportController.getAllReports);
 
 // Categories
 router.get('/categories', adminController.getCategories);
@@ -43,7 +43,6 @@ router.get('/service-reports', adminController.getServiceReports);
 router.get('/stats/chart', async (req, res) => {
   try {
     const { period } = req.query;
-    
     let data = [];
     if (period === 'week') {
       data = [28, 32, 35, 42, 48, 52, 45];
@@ -52,7 +51,6 @@ router.get('/stats/chart', async (req, res) => {
     } else if (period === 'year') {
       data = [1450, 1680, 1820, 1950, 2100, 2250, 2400, 2350, 2280, 2150, 1980, 1820];
     }
-    
     res.json({ data });
   } catch (error) {
     console.error('Get chart data error:', error);

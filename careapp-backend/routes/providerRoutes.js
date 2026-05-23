@@ -104,21 +104,19 @@ router.get('/dependents/:dependentId', async (req, res) => {
   }
 });
 
+// ==================== BOOKING REQUESTS ====================
 router.get('/booking-requests', async (req, res) => {
   try {
-    // البحث عن معرف ServiceProvider للمستخدم الحالي
     const provider = await ServiceProvider.findOne({ userid: req.user.userId });
     if (!provider) return res.json([]);
 
-    // البحث عن الطلبات التي يكون فيها providerId إما User._id أو ServiceProvider._id
     const requests = await BookingRequest.find({
       $or: [
-        { providerId: req.user.userId },          // User._id
-        { providerId: provider._id }              // ServiceProvider._id (للبيانات القديمة)
+        { providerId: req.user.userId },
+        { providerId: provider._id }
       ]
     }).sort({ createdAt: -1 });
 
-    // إزالة التكرار (إذا ظهر نفس الطلب مرتين)
     const uniqueRequests = [];
     const seenIds = new Set();
     for (const reqDoc of requests) {
@@ -129,7 +127,6 @@ router.get('/booking-requests', async (req, res) => {
     }
 
     const formatted = await Promise.all(uniqueRequests.map(async (reqDoc) => {
-      // ... باقي الكود كما هو (تحويل dependent و client)
       let client = null;
       if (reqDoc.clientId) {
         client = await User.findById(reqDoc.clientId).select('fullName email phoneNumber address wilaya').lean();
@@ -170,99 +167,14 @@ router.get('/booking-requests', async (req, res) => {
         createdAt: reqDoc.createdAt,
         respondedAt: reqDoc.respondedAt,
         dependent,
-        taskId: reqDoc.taskId
+        taskId: reqDoc.taskId,
+        bookingId: reqDoc.bookingId || null   // ✅ إضافة bookingId
       };
     }));
 
     res.json(formatted);
   } catch (error) {
     console.error('Error fetching booking requests:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ==================== ACCEPT BOOKING REQUEST (FIXED) ====================
-router.put('/booking-requests/:id/accept', async (req, res) => {
-  try {
-    const { id } = req.params;
-    // ✅ البحث مباشرة باستخدام providerId = req.user.userId
-    const request = await BookingRequest.findOne({ _id: id, providerId: req.user.userId, status: 'pending' });
-    if (!request) return res.status(404).json({ message: 'Request not found' });
-
-    request.status = 'accepted';
-    request.respondedAt = new Date();
-    await request.save();
-
-    const client = await User.findById(request.clientId);
-    const providerUser = await User.findById(req.user.userId);
-    const providerDetails = await ServiceProvider.findOne({ userid: req.user.userId });
-    if (!providerDetails) return res.status(400).json({ message: 'Provider details incomplete' });
-
-    const hourlyRate = providerDetails.hourlyRate || 0;
-    const startHours = parseTimeToHours(request.startTime);
-    const endHours = parseTimeToHours(request.endTime);
-    const hours = Math.max(0, endHours - startHours);
-    const totalPrice = hourlyRate * hours;
-
-    const booking = new Booking({
-      client: client.fullName,
-      clientId: request.clientId,
-      clientPhone: client.phoneNumber,
-      provider: providerUser.fullName,
-      providerId: req.user.userId,
-      providerPhone: providerUser.phoneNumber,
-      service: request.serviceName,
-      date: new Date(request.date),
-      startTime: request.startTime,
-      endTime: request.endTime,
-      location: request.location,
-      notes: request.notes,
-      dependentId: request.dependantId || request.dependentId,
-      status: 'Confirmed',
-      totalPrice,
-      paymentStatus: 'Pending',
-      clientTasks: request.tasks ? request.tasks.map(t => ({ taskName: t.taskName, status: 'pending' })) : [],
-      taskId: request.taskId
-    });
-    await booking.save();
-
-    await Notification.create({
-      userId: request.clientId,
-      title: 'Booking Accepted',
-      message: `${providerUser.fullName} has accepted your booking request. Please complete half payment to start tracking.`,
-      type: 'booking',
-      bookingId: booking._id
-    });
-
-    res.json({ message: 'Booking request accepted', bookingId: booking._id, totalPrice, halfAmount: totalPrice / 2 });
-  } catch (error) {
-    console.error('Accept booking error:', error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ==================== REJECT BOOKING REQUEST (FIXED) ====================
-router.put('/booking-requests/:id/reject', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const request = await BookingRequest.findOne({ _id: id, providerId: req.user.userId, status: 'pending' });
-    if (!request) return res.status(404).json({ message: 'Request not found' });
-
-    request.status = 'rejected';
-    request.respondedAt = new Date();
-    await request.save();
-
-    const providerUser = await User.findById(req.user.userId);
-    await Notification.create({
-      userId: request.clientId,
-      title: 'Booking Rejected',
-      message: `${providerUser.fullName} has rejected your booking request.`,
-      type: 'booking'
-    });
-
-    res.json({ message: 'Booking request rejected' });
-  } catch (error) {
-    console.error('Reject booking error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -310,6 +222,10 @@ router.put('/booking-requests/:id/accept', async (req, res) => {
       taskId: request.taskId
     });
     await booking.save();
+
+    // ✅ ربط bookingId بالطلب
+    request.bookingId = booking._id;
+    await request.save();
 
     await Notification.create({
       userId: request.clientId,
@@ -394,7 +310,7 @@ router.get('/reviews', async (req, res) => {
       rating: f.overall_rating,
       comment: f.comment,
       reply: f.reply,
-      date: f.createdAt.toISOString().split('T')[0],
+      date: (f.createdAt ? new Date(f.createdAt) : new Date()).toISOString().split('T')[0],
       service: f.bookingId?.service || 'Service',
       replied: !!f.reply
     }));

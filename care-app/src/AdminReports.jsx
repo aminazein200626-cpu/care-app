@@ -3,10 +3,8 @@ import React, { useState, useEffect } from 'react';
 const AdminReports = ({ isDarkMode }) => {
   const [reports, setReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
-  const [showWarningForm, setShowWarningForm] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [dateFilter, setDateFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [reportsPerPage] = useState(4);
   const [loading, setLoading] = useState(true);
@@ -14,45 +12,18 @@ const AdminReports = ({ isDarkMode }) => {
   const fetchReports = async () => {
     const token = localStorage.getItem('token');
     try {
+      // المسار الجديد لجلب جميع التقارير (للمسؤول)
       const response = await fetch('http://localhost:5001/api/admin/reports', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
+      // نتوقع من الخادم إرجاع مصفوفة من التقارير بالشكل:
+      // { id, email1, email2, reason, description, created_at }
       setReports(data.reports || []);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching reports:', error);
       setLoading(false);
-    }
-  };
-
-  const resolveReport = async (id, action, warningMessage = '') => {
-    const token = localStorage.getItem('token');
-    try {
-      const response = await fetch(`http://localhost:5001/api/admin/reports/${id}/resolve`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ action, message: warningMessage })
-      });
-      
-      const data = await response.json();
-      console.log('Response:', data);
-      
-      if (action === 'ban') {
-        alert('User Banned Successfully');
-      } else if (action === 'warning') {
-        alert('Warning Sent');
-      }
-      
-      fetchReports();
-      setSelectedReport(null);
-      setShowWarningForm(false);
-    } catch (error) {
-      console.error('Error resolving report:', error);
-      alert('Failed to process report');
     }
   };
 
@@ -71,34 +42,16 @@ const AdminReports = ({ isDarkMode }) => {
     warning: '#f59e0b'
   };
 
-  const getStatusColor = (status) => {
-    switch(status) {
-      case 'Resolved': return '#10b981';
-      case 'Pending': return '#f59e0b';
-      case 'Review': return '#3b82f6';
-      default: return '#6b7280';
-    }
-  };
-
-  const getStatusBgColor = (status) => {
-    switch(status) {
-      case 'Resolved': return 'rgba(16, 185, 129, 0.1)';
-      case 'Pending': return 'rgba(245, 158, 11, 0.1)';
-      case 'Review': return 'rgba(59, 130, 246, 0.1)';
-      default: return 'rgba(107, 114, 128, 0.1)';
-    }
-  };
-
   const filteredReports = reports.filter(report => {
     const matchesSearch = 
-      report.sender?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      report.target?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      report.reason?.toLowerCase().includes(searchTerm.toLowerCase());
+      report.email1?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.email2?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.reason?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      report.description?.toLowerCase().includes(searchTerm.toLowerCase());
     
-    const matchesDate = dateFilter === "" || report.date === dateFilter;
-    const matchesStatus = statusFilter === "All" || report.status === statusFilter;
+    const matchesDate = dateFilter === "" || report.created_at?.split('T')[0] === dateFilter;
     
-    return matchesSearch && matchesDate && matchesStatus;
+    return matchesSearch && matchesDate;
   });
 
   const indexOfLastReport = currentPage * reportsPerPage;
@@ -107,7 +60,7 @@ const AdminReports = ({ isDarkMode }) => {
   const totalPages = Math.ceil(filteredReports.length / reportsPerPage);
 
   const paginate = (pageNumber) => setCurrentPage(pageNumber);
-  const uniqueDates = [...new Set(reports.map(r => r.date))].sort().reverse();
+  const uniqueDates = [...new Set(reports.map(r => r.created_at?.split('T')[0]))].filter(Boolean).sort().reverse();
 
   if (loading) {
     return <div style={{ textAlign: 'center', padding: '50px' }}>Loading reports...</div>;
@@ -117,7 +70,7 @@ const AdminReports = ({ isDarkMode }) => {
     <div style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
       <div style={{ marginBottom: '25px' }}>
         <h2 style={{color: '#1a2e05', fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px' }}>System Reports</h2>
-        <p style={{ color: '#737373', fontSize: '13px' }}>Manage user complaints and tracking information</p>
+        <p style={{ color: '#737373', fontSize: '13px' }}>User reports (email based)</p>
       </div>
 
       <div style={{ 
@@ -129,7 +82,7 @@ const AdminReports = ({ isDarkMode }) => {
       }}>
         <input 
           type="text" 
-          placeholder="Search by sender, target, or reason..." 
+          placeholder="Search by reporter, reported, reason..." 
           value={searchTerm}
           style={{ 
             flex: 2, 
@@ -169,28 +122,6 @@ const AdminReports = ({ isDarkMode }) => {
           ))}
         </select>
 
-        <select 
-          value={statusFilter}
-          style={{ 
-            padding: '12px 18px', 
-            borderRadius: '14px', 
-            border: `1px solid ${theme.border}`, 
-            backgroundColor: theme.input, 
-            color: theme.text, 
-            outline: 'none',
-            cursor: 'pointer'
-          }}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setCurrentPage(1);
-          }}
-        >
-          <option value="All">All Status</option>
-          <option value="Pending">Pending</option>
-          <option value="Review">Review</option>
-          <option value="Resolved">Resolved</option>
-        </select>
-
         <div style={{ fontSize: '13px', color: '#737373' }}>
           Total: <strong style={{ color: theme.accent }}>{filteredReports.length}</strong> reports
         </div>
@@ -206,10 +137,10 @@ const AdminReports = ({ isDarkMode }) => {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
           <thead>
             <tr style={{ backgroundColor: theme.primary, color: theme.accent, textAlign: 'left' }}>
-              <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>From / To</th>
+              <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Reporter (email1)</th>
+              <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Reported (email2)</th>
               <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Reason</th>
               <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Date</th>
-              <th style={{ padding: '15px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Status</th>
               <th style={{ padding: '15px 20px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase' }}>Action</th>
               </tr>
           </thead>
@@ -217,22 +148,14 @@ const AdminReports = ({ isDarkMode }) => {
             {currentReports.map(rep => (
               <tr key={rep.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
                 <td style={{ padding: '12px 20px' }}>
-                  <div style={{ fontWeight: '700', fontSize: '14px' }}>{rep.sender}</div>
-                  <div style={{ fontSize: '10px', opacity: 0.5 }}>Reporting: {rep.target}</div>
+                  <div style={{ fontWeight: '700', fontSize: '13px' }}>{rep.email1}</div>
+                </td>
+                <td style={{ padding: '12px 20px' }}>
+                  <div style={{ fontWeight: '700', fontSize: '13px' }}>{rep.email2}</div>
                 </td>
                 <td style={{ padding: '12px 20px', fontWeight: '500' }}>{rep.reason}</td>
-                <td style={{ padding: '12px 20px', opacity: 0.5, fontSize: '11px' }}>{rep.date}</td>
-                <td style={{ padding: '12px 20px' }}>
-                  <span style={{ 
-                    color: getStatusColor(rep.status), 
-                    fontSize: '10px', 
-                    fontWeight: '800', 
-                    backgroundColor: getStatusBgColor(rep.status), 
-                    padding: '4px 10px', 
-                    borderRadius: '20px' 
-                  }}>
-                    {rep.status}
-                  </span>
+                <td style={{ padding: '12px 20px', opacity: 0.5, fontSize: '11px' }}>
+                  {rep.created_at ? new Date(rep.created_at).toLocaleDateString() : 'N/A'}
                 </td>
                 <td style={{ padding: '12px 20px', textAlign: 'center' }}>
                   <button 
@@ -292,6 +215,7 @@ const AdminReports = ({ isDarkMode }) => {
         )}
       </div>
 
+      {/* Modal for report details */}
       {selectedReport && (
         <div style={{ 
           position: 'fixed', inset: 0, 
@@ -303,55 +227,21 @@ const AdminReports = ({ isDarkMode }) => {
             backgroundColor: theme.card, padding: '40px', borderRadius: '30px', 
             width: '500px', border: `1px solid ${theme.accent}`, textAlign: 'center' 
           }}>
-            <h3 style={{ color: theme.accent, marginBottom: '15px', fontSize: '22px' }}>Incident Tracking</h3>
+            <h3 style={{ color: theme.accent, marginBottom: '15px', fontSize: '22px' }}>Report Details</h3>
             <div style={{ backgroundColor: '#050505', padding: '20px', borderRadius: '15px', textAlign: 'left', marginBottom: '30px', border: '1px solid #1f1f1f' }}>
-              <label style={{ fontSize: '10px', color: theme.accent, display: 'block', marginBottom: '10px', letterSpacing: '1px' }}>REPORT DETAILS</label>
+              <label style={{ fontSize: '10px', color: theme.accent, display: 'block', marginBottom: '10px', letterSpacing: '1px' }}>REPORT INFORMATION</label>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Reporter (email1):</strong> {selectedReport.email1}</p>
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Reported (email2):</strong> {selectedReport.email2}</p>
               <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Reason:</strong> {selectedReport.reason}</p>
               <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Description:</strong> {selectedReport.description || 'No description provided'}</p>
-              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Sender:</strong> {selectedReport.sender} ({selectedReport.senderEmail})</p>
-              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Target:</strong> {selectedReport.target} ({selectedReport.targetEmail})</p>
-              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Date:</strong> {selectedReport.date}</p>
-              {selectedReport.adminResponse && (
-                <p style={{ fontSize: '13px', margin: '5px 0', color: theme.accent }}><strong>Admin Response:</strong> {selectedReport.adminResponse}</p>
-              )}
+              <p style={{ fontSize: '13px', margin: '5px 0' }}><strong>Date:</strong> {selectedReport.created_at ? new Date(selectedReport.created_at).toLocaleString() : 'N/A'}</p>
             </div>
             
-            {!showWarningForm ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                <button 
-                  onClick={() => resolveReport(selectedReport.id, 'ban')}
-                  style={{ padding: '16px', backgroundColor: theme.danger, color: '#fecaca', border: 'none', borderRadius: '16px', fontWeight: '800', cursor: 'pointer', fontSize: '12px' }}>
-                  VALIDATE & BAN
-                </button>
-                <button 
-                  onClick={() => setShowWarningForm(true)}
-                  style={{ padding: '16px', backgroundColor: theme.primary, color: theme.accent, border: `1px solid ${theme.accent}`, borderRadius: '16px', fontWeight: '800', cursor: 'pointer', fontSize: '12px' }}>
-                  SEND WARNING
-                </button>
-              </div>
-            ) : (
-              <div style={{ textAlign: 'left' }}>
-                <textarea 
-                  id="warningMessage"
-                  placeholder="Type the warning message..." 
-                  style={{ width: '100%', height: '100px', backgroundColor: '#050505', border: '1px solid #333', borderRadius: '15px', padding: '15px', color: '#fff', outline: 'none', boxSizing: 'border-box' }} 
-                />
-                <button 
-                  onClick={() => {
-                    const message = document.getElementById('warningMessage').value;
-                    resolveReport(selectedReport.id, 'warning', message);
-                  }} 
-                  style={{ width: '100%', marginTop: '15px', padding: '16px', backgroundColor: theme.accent, color: '#000', borderRadius: '16px', fontWeight: '800', border: 'none', cursor: 'pointer' }}>
-                  CONFIRM & SEND
-                </button>
-              </div>
-            )}
-            
             <button 
-              onClick={() => {setSelectedReport(null); setShowWarningForm(false)}} 
+              onClick={() => setSelectedReport(null)} 
               style={{ marginTop: '20px', background: 'none', border: 'none', color: '#737373', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
             >
-              Cancel Review
+              Close
             </button>
           </div>
         </div>

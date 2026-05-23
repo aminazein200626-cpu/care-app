@@ -29,12 +29,12 @@ class _TrackingScreenState extends State<TrackingScreen> {
   IO.Socket? _socket;
   bool _isConnected = false;
 
-  // معلومات المعال والملفات
+ 
   Map<String, dynamic>? _dependent;
   List<Map<String, dynamic>> _dependentFiles = [];
   List<Map<String, dynamic>> _taskFiles = [];
 
-  // مراحل التتبع
+
   bool _accepted = false;
   bool _onWay = false;
   bool _arrived = false;

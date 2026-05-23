@@ -15,12 +15,14 @@ import '../../services/report_service.dart';
 class ProfileScreen extends StatefulWidget {
   final String? targetUserId;
   final String? targetName;
+  final String? targetEmail;     // ✅ جديد: البريد الإلكتروني للمستخدم المستهدف (للتبليغ)
   final String? targetRole;
 
   const ProfileScreen({
     super.key,
     this.targetUserId,
     this.targetName,
+    this.targetEmail,
     this.targetRole,
   });
 
@@ -53,19 +55,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _loadProfile();
-    _checkPermissions(); // ✅ التحقق من الأذونات عند بدء الشاشة
+    _checkPermissions();
   }
 
-  // ✅ التحقق من الأذونات وطلبها إذا لزم الأمر
   Future<void> _checkPermissions() async {
     final statusPhotos = await Permission.photos.status;
     final statusCamera = await Permission.camera.status;
     
     if (!statusPhotos.isGranted || !statusCamera.isGranted) {
-      await [
-        Permission.photos,
-        Permission.camera,
-      ].request();
+      await [Permission.photos, Permission.camera].request();
     }
   }
 
@@ -106,7 +104,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // ✅ طلب أذونات المعرض
   Future<bool> _requestGalleryPermission() async {
     final status = await Permission.photos.request();
     if (status.isGranted) {
@@ -122,7 +119,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return false;
   }
 
-  // ✅ طلب أذونات الكاميرا
   Future<bool> _requestCameraPermission() async {
     final status = await Permission.camera.request();
     if (status.isGranted) {
@@ -211,8 +207,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ✅ زر التبليغ باستخدام البريد الإلكتروني (email2)
   void _showReportDialog() {
     if (widget.targetUserId == null) return;
+
+    // نستخدم البريد الإلكتروني للمستخدم المستهدف (إما من الـ widget أو من _userInfo)
+    final targetEmail = widget.targetEmail ?? _userInfo['email'];
+    if (targetEmail == null || targetEmail.isEmpty) {
+      _showError('Cannot report: no email address for this user');
+      return;
+    }
 
     final reasonCtrl = TextEditingController();
     final descCtrl = TextEditingController();
@@ -256,7 +260,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Navigator.pop(ctx);
               try {
                 await _reportService.createReport(
-                  reportedId: widget.targetUserId!,
+                  reportedEmail: targetEmail,   // ✅ نرسل البريد الإلكتروني (email2)
                   reason: reasonCtrl.text.trim(),
                   description: descCtrl.text.trim(),
                 );
@@ -413,7 +417,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // صورة البروفايل مع كاميرا
             Stack(
               children: [
                 Container(
@@ -468,22 +471,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: GoogleFonts.plusJakartaSans(fontSize: 13, color: Colors.grey[500]),
             ),
             const SizedBox(height: 20),
-            
-            // معلومات شخصية
             _buildInfoCard(),
             const SizedBox(height: 20),
-            
-            // وصول سريع
             _buildQuickAccessCard(),
             const SizedBox(height: 20),
-            
-            // تفضيلات
             _buildPreferencesCard(),
             const SizedBox(height: 20),
-            
-            // زر تسجيل الخروج
-            if (widget.targetUserId == null)
-              _buildLogoutButton(),
+            if (widget.targetUserId == null) _buildLogoutButton(),
           ],
         ),
       ),

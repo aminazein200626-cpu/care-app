@@ -21,9 +21,9 @@ class ReportService {
     };
   }
 
-  /// Create a report against a user
+  /// إنشاء تقرير جديد (يتم إرسال بريد المُبلَّغ عنه فقط)
   Future<Map<String, dynamic>> createReport({
-    required String reportedId,
+    required String reportedEmail,   // email2
     required String reason,
     String description = '',
   }) async {
@@ -32,7 +32,7 @@ class ReportService {
       Uri.parse('${ApiConfig.baseUrl}/api/reports'),
       headers: headers,
       body: jsonEncode({
-        'reportedId': reportedId,
+        'email2': reportedEmail,
         'reason': reason,
         'description': description,
       }),
@@ -46,7 +46,7 @@ class ReportService {
     }
   }
 
-  /// Get all reports submitted by the current user
+  /// الحصول على قائمة التقارير التي أرسلها المستخدم الحالي
   Future<List<dynamic>> getMyReports() async {
     final headers = await _getHeaders();
     final response = await http.get(
@@ -55,7 +55,8 @@ class ReportService {
     );
 
     if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+      final data = jsonDecode(response.body);
+      return data['reports'] ?? [];
     } else {
       return [];
     }

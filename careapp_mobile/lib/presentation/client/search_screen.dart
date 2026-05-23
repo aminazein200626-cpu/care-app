@@ -6,7 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_theme.dart';
 import '../../core/app_routes.dart';
 import '../../services/client_api_service.dart';
-import '../../services/report_service.dart'; // ✅ إضافة خدمة الإبلاغ
+import '../../services/report_service.dart';
 
 class ServiceProvider {
   final String id;
@@ -91,7 +91,7 @@ class _SearchScreenState extends State<SearchScreen>
   late Animation<double> _fadeAnim;
 
   final ClientApiService _api = ClientApiService();
-  final ReportService _reportService = ReportService(); // ✅ خدمة الإبلاغ
+  final ReportService _reportService = ReportService();
   final TextEditingController _searchCtrl = TextEditingController();
 
   List<String> _wilayas = ['All'];
@@ -195,7 +195,7 @@ class _SearchScreenState extends State<SearchScreen>
     return _services.where((s) => s['categoryId'] == _selectedCategoryId).toList();
   }
 
-  // ✅ نافذة الإبلاغ عن المزود
+  // ✅ نافذة الإبلاغ عن المزود (باستخدام البريد الإلكتروني)
   void _showReportDialog(ServiceProvider provider) {
     final reasonCtrl = TextEditingController();
     final descCtrl = TextEditingController();
@@ -244,7 +244,7 @@ class _SearchScreenState extends State<SearchScreen>
               Navigator.pop(ctx);
               try {
                 await _reportService.createReport(
-                  reportedId: provider.id,
+                  reportedEmail: provider.email,  // ✅ نرسل البريد الإلكتروني
                   reason: reasonCtrl.text.trim(),
                   description: descCtrl.text.trim(),
                 );

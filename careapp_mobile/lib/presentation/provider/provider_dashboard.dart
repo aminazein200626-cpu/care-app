@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/app_theme.dart';
 import '../../core/api_config.dart';
 import '../../services/theme_provider.dart';
-import 'consult_requests_screen.dart';
 import 'profile_page.dart';
 import 'calendar_page.dart';
 import 'communication_screen.dart';

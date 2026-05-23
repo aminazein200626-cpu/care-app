@@ -21,6 +21,7 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
   bool _isLoading = true;
   String _searchQuery = "";
   String _statusFilter = "All";
+  bool _isRating = false;
 
   @override
   void initState() {
@@ -44,7 +45,6 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
       if (response.statusCode == 200) {
         final List data = jsonDecode(response.body);
         if (mounted) {
-          // تأكد من أن الحالة 'pending' بصيغة صغيرة
           final normalized = data.map((item) {
             if (item['status'] != null && item['status'] is String) {
               item['status'] = item['status'].toString().toLowerCase();
@@ -64,10 +64,10 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
     }
   }
 
-  void _reportClient(String clientId, String clientName) {
-    if (clientId.isEmpty) {
+  void _reportClient(String clientId, String clientName, String clientEmail) {
+    if (clientEmail.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Client ID not available'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Client email not available'), backgroundColor: Colors.red),
       );
       return;
     }
@@ -77,10 +77,116 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
         builder: (_) => ProfileScreen(
           targetUserId: clientId,
           targetName: clientName,
+          targetEmail: clientEmail,
           targetRole: 'Client',
         ),
       ),
     );
+  }
+
+  void _showRateClientDialog(String bookingId, String clientName) {
+    if (bookingId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot rate: no booking ID'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    int rating = 0;
+    String comment = '';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text('Rate Client: $clientName'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("How was your experience with this client?"),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(5, (i) => IconButton(
+                  icon: Icon(i < rating ? Icons.star : Icons.star_border, color: Colors.amber, size: 32),
+                  onPressed: () => setDialogState(() => rating = i + 1),
+                )),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  hintText: "Leave a comment...",
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (val) => comment = val,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Skip"),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (rating == 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please select a rating'), backgroundColor: Colors.red),
+                  );
+                  return;
+                }
+                Navigator.pop(ctx);
+                await _submitClientRating(bookingId, rating, comment);
+              },
+              child: const Text("Submit"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submitClientRating(String bookingId, int rating, String comment) async {
+    setState(() => _isRating = true);
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null) {
+      setState(() => _isRating = false);
+      return;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/api/provider/bookings/$bookingId/rate-client'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'rating': rating,
+          'comment': comment,
+        }),
+      );
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Client rated successfully"), backgroundColor: Colors.green),
+        );
+        await _fetchRequests();
+      } else {
+        final error = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: ${error['message']}"), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+      );
+    } finally {
+      setState(() => _isRating = false);
+    }
   }
 
   List<Map<String, dynamic>> get _filteredRequests {
@@ -97,10 +203,14 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
 
   Color _getStatusColor(String status) {
     switch (status) {
-      case 'pending': return Colors.orange;
-      case 'accepted': return Colors.green;
-      case 'rejected': return Colors.red;
-      default: return Colors.grey;
+      case 'pending':
+        return Colors.orange;
+      case 'accepted':
+        return Colors.green;
+      case 'rejected':
+        return Colors.red;
+      default:
+        return Colors.grey;
     }
   }
 
@@ -135,16 +245,20 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
                 _buildSearchBar(isDark),
                 _buildStatsSummary(isDark),
                 Expanded(
-                  child: _filteredRequests.isEmpty
-                      ? _buildEmptyState(isDark)
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: _filteredRequests.length,
-                          itemBuilder: (context, index) {
-                            final request = _filteredRequests[index];
-                            return _buildRequestCard(request, isDark);
-                          },
-                        ),
+                  child: RefreshIndicator(
+                    onRefresh: _fetchRequests,
+                    color: AppTheme.primary,
+                    child: _filteredRequests.isEmpty
+                        ? _buildEmptyState(isDark)
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: _filteredRequests.length,
+                            itemBuilder: (context, index) {
+                              final request = _filteredRequests[index];
+                              return _buildRequestCard(request, isDark);
+                            },
+                          ),
+                  ),
                 ),
               ],
             ),
@@ -254,6 +368,9 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
     final dependent = request['dependent'];
     final clientId = request['clientId']?.toString() ?? '';
     final clientName = request['clientName'] ?? 'Unknown';
+    final clientEmail = request['clientEmail']?.toString() ?? '';
+    final bookingId = request['bookingId']?.toString() ?? '';
+    final bool canRate = request['status'] == 'accepted' && bookingId.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -275,7 +392,11 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
                     children: [
                       Text(
                         request['serviceName'] ?? 'Care Service',
-                        style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87),
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
                       ),
                       Text(
                         "Client: $clientName",
@@ -335,11 +456,14 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
                   children: [
                     const Text("👤 Dependant", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                     const SizedBox(height: 4),
-                    Text("${dependent['name'] ?? 'N/A'} (${dependent['relationship'] ?? 'N/A'})", style: const TextStyle(fontSize: 12)),
+                    Text("${dependent['name'] ?? 'N/A'} (${dependent['relationship'] ?? 'N/A'})",
+                        style: const TextStyle(fontSize: 12)),
                     if (dependent['age'] != null)
-                      Text("Age: ${dependent['age']}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      Text("Age: ${dependent['age']}",
+                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
                     if ((dependent['healthNotes'] ?? '').isNotEmpty)
-                      Text(dependent['healthNotes'], style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      Text(dependent['healthNotes'],
+                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
                   ],
                 ),
               ),
@@ -349,13 +473,14 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.push(
+                    onPressed: () async {
+                      await Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (_) => RequestDetailsScreen(requestData: request),
                         ),
                       );
+                      _fetchRequests(); // إعادة تحميل بعد العودة من التفاصيل
                     },
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: AppTheme.primary),
@@ -367,7 +492,7 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => _reportClient(clientId, clientName),
+                    onPressed: () => _reportClient(clientId, clientName, clientEmail),
                     icon: const Icon(Icons.flag_outlined, size: 18),
                     label: const Text('Report Client'),
                     style: OutlinedButton.styleFrom(
@@ -379,6 +504,23 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
                 ),
               ],
             ),
+            if (canRate)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _isRating ? null : () => _showRateClientDialog(bookingId, clientName),
+                    icon: const Icon(Icons.star_outline, size: 18),
+                    label: Text(_isRating ? 'Submitting...' : 'Rate Client'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.amber,
+                      side: const BorderSide(color: Colors.amber),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -412,7 +554,10 @@ class _BookingRequestsScreenState extends State<BookingRequestsScreen> {
           const SizedBox(height: 16),
           Text("No booking requests", style: TextStyle(color: Colors.grey[500], fontSize: 16)),
           const SizedBox(height: 8),
-          Text("When clients request your services, they will appear here.", style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+          Text(
+            "When clients request your services, they will appear here.",
+            style: TextStyle(color: Colors.grey[400], fontSize: 12),
+          ),
         ],
       ),
     );
